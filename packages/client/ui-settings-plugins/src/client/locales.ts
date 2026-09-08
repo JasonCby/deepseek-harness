@@ -11,6 +11,11 @@ export type PluginsSettingsLocaleKey =
   | 'webSearchTitle' | 'webSearchDescription'
   | 'webSearchApiKey' | 'webSearchApiKeyHint' | 'webSearchApiKeySet' | 'webSearchApiKeyUnset'
   | 'webSearchBaseUrl' | 'webSearchBaseUrlHint' | 'webSearchMaxUses' | 'webSearchMaxUsesHint'
+  | 'feishuTitle' | 'feishuDescription'
+  | 'feishuTransport' | 'feishuTransportHint' | 'feishuDomain' | 'feishuDomainHint'
+  | 'feishuAppId' | 'feishuAppIdHint'
+  | 'feishuAppSecret' | 'feishuAppSecretHint' | 'feishuAppSecretSet' | 'feishuAppSecretUnset'
+  | 'feishuAllowChatIds' | 'feishuAllowChatIdsHint' | 'feishuInvalidValue'
   | 'subagentModelSelectionTitle' | 'subagentModelSelectionDescription'
   | 'subagentModelSelectionToggle' | 'subagentModelSelectionChoose' | 'subagentModelSelectionAllowed'
   | 'subagentModelSelectionLoading' | 'subagentModelSelectionLoadFailed' | 'subagentModelSelectionRetry'
@@ -57,6 +62,21 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: 'Leave blank to use the provider default.',
   webSearchMaxUses: 'Max searches per request',
   webSearchMaxUsesHint: 'How many times one request may search before it must answer.',
+  feishuTitle: 'Feishu bot',
+  feishuDescription: 'The Feishu (Lark) chat bot: chats become agent sessions.',
+  feishuTransport: 'Transport',
+  feishuTransportHint: 'websocket (long connection, no public URL) or webhook (needs a composed listener).',
+  feishuDomain: 'API domain',
+  feishuDomainHint: 'feishu, lark, or a self-hosted deployment origin such as https://open.internal.example.com.',
+  feishuAppId: 'App ID',
+  feishuAppIdHint: 'Optional literal app id; blank uses the referenced credential.',
+  feishuAppSecret: 'App secret',
+  feishuAppSecretHint: 'Stored outside the settings file. Leave blank to keep the current secret.',
+  feishuAppSecretSet: 'A secret is configured.',
+  feishuAppSecretUnset: 'No secret is configured; the bot stays offline until one is.',
+  feishuAllowChatIds: 'Allowed chats',
+  feishuAllowChatIdsHint: 'Comma-separated chat ids; blank answers every chat that reaches the bot.',
+  feishuInvalidValue: 'Enter one of the listed values, or leave blank to use the default.',
   subagentModelSelectionTitle: 'Subagent',
   subagentModelSelectionDescription: 'Control which models agents may choose for subagents.',
   subagentModelSelectionToggle: 'Allow agents to choose models for subagents',
@@ -113,6 +133,21 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: '留空则使用提供方默认地址。',
   webSearchMaxUses: '单次请求最多搜索次数',
   webSearchMaxUsesHint: '一次请求在必须作答前最多可以搜索多少次。',
+  feishuTitle: '飞书机器人',
+  feishuDescription: '飞书（Lark）聊天机器人：每个会话对应一个 Agent 会话。',
+  feishuTransport: '传输方式',
+  feishuTransportHint: 'websocket（长连接，无需公网地址）或 webhook（需要组合监听器）。',
+  feishuDomain: 'API 域名',
+  feishuDomainHint: 'feishu、lark，或私有化部署的完整地址，如 https://open.internal.example.com。',
+  feishuAppId: 'App ID',
+  feishuAppIdHint: '可选的应用 ID 字面量；留空则使用引用的凭据。',
+  feishuAppSecret: 'App Secret',
+  feishuAppSecretHint: '不写入设置文件。留空表示保持当前密钥。',
+  feishuAppSecretSet: '已配置密钥。',
+  feishuAppSecretUnset: '未配置密钥；配置之前机器人保持离线。',
+  feishuAllowChatIds: '允许的会话',
+  feishuAllowChatIdsHint: '逗号分隔的会话 ID；留空则应答到达机器人的每个会话。',
+  feishuInvalidValue: '请填写列出的取值之一，或留空使用默认值。',
   subagentModelSelectionTitle: 'Subagent',
   subagentModelSelectionDescription: '控制 Agent 为 Subagent 选择模型的权限。',
   subagentModelSelectionToggle: '允许 Agent 为 Subagent 选择模型',

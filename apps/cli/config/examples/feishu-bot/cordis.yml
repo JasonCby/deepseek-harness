@@ -1,0 +1,34 @@
+# Opt-in Feishu bot overlay over the shipped Web composition. The default
+# transport is the outbound long connection, so no public URL is needed; set
+# DSH_FEISHU_APP_ID / DSH_FEISHU_APP_SECRET credentials before loading.
+
+- insert:
+    - id: feishu-bot
+      name: '@deepseek-ai/dsh-feishu'
+      config:
+        transport: websocket
+        domain: feishu
+        workspacePath: !!js process.env.DSH_FEISHU_WORKSPACE ?? process.cwd()
+        agentPreset: standard
+        permissionPreset: read-only
+        allowChatIds: []
+
+# Webhook transport alternative: mount a dedicated isolated WebServer so the
+# public ingress never exposes the UI API, then switch the section's transport
+# to webhook (here or later through the settings UI).
+#
+#     - id: feishu-webhook
+#       name: cordis:group
+#       group: true
+#       isolate:
+#         webServer: true
+#       config:
+#         - id: feishu-webhook-server
+#           name: '@deepseek-ai/dsh-host-webserver'
+#           config:
+#             host: '127.0.0.1'
+#             port: !!js Number(process.env.DSH_FEISHU_WEBHOOK_PORT ?? 3082)
+#
+# The feishu plugin discovers the composed webServer through its optional
+# inject; point a TLS reverse proxy at the port above and configure the
+# verification token / encrypt key credentials on the Feishu side.

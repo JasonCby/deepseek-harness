@@ -1,0 +1,308 @@
+/** ConversationRouter behavior tests over a real Cordis Context with stubbed core services. */
+
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import { Context } from '@deepseek-ai/cordis'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { ConversationRouter, sessionIdForChat } from '../src/conversation.ts'
+import type { FeishuSettings } from '../src/config.ts'
+import type { InboundMessage } from '../src/types.ts'
+
+/** One mutable settings section the router reads live. */
+function settings(): FeishuSettings {
+  return {
+    transport: 'websocket',
+    domain: 'feishu',
+    appIdEnv: 'DSH_FEISHU_APP_ID',
+    appSecretEnv: 'DSH_FEISHU_APP_SECRET',
+    verificationTokenEnv: 'DSH_FEISHU_VERIFICATION_TOKEN',
+    encryptKeyEnv: 'DSH_FEISHU_ENCRYPT_KEY',
+    path: '/feishu',
+    maxBodyBytes: 65536,
+    allowChatIds: [],
+    groupRequireMention: true,
+    replyCharLimit: 4000,
+    failureNotice: 'processing failed',
+    dedupCapacity: 64,
+  }
+}
+
+/** One inbound chat message. */
+function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
+  return {
+    messageId: 'om_1',
+    chatId: 'oc_1',
+    chatType: 'p2p',
+    senderOpenId: 'ou_1',
+    text: 'hello',
+    mentioned: false,
+    ...overrides,
+  }
+}
+
+/** The single reply sender the router resolves turns into. */
+const reply = vi.fn(async () => {})
+
+/** Handles the stub agent registry served, keyed by session id. */
+const servedHandles = new Map<string, AgentHandle>()
+/** Session headers the stub persistence lists. */
+let persistedHeaders: { id: string }[] = []
+
+let contexts: Context[] = []
+
+/** Build one context whose core services are behavioral stubs. */
+function stubbedContext(): Context {
+  const ctx = new Context()
+  contexts.push(ctx)
+  ctx.provide('agents', {
+    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+      const handle = buildHandle(sessionId)
+      if (setup !== undefined) await setup({ agent: handle.agent })
+      servedHandles.set(sessionId, handle)
+      return handle
+    }),
+    resume: vi.fn(async ({ resumeSessionId, setup }: { resumeSessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+      const handle = buildHandle(resumeSessionId)
+      if (setup !== undefined) await setup({ agent: handle.agent })
+      servedHandles.set(resumeSessionId, handle)
+      return handle
+    }),
+    get: (id: string) => servedHandles.get(id)?.agent,
+  })
+  ctx.provide('agentPresets', {
+    resolve: vi.fn(async (id: string) => ({ id })),
+    standingKeyFor: vi.fn(async () => {}),
+    mount: mount,
+  })
+  ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'chat' }) })
+  ctx.provide('permissionPresets', { resolve: vi.fn(), set: vi.fn() })
+  ctx.provide('workspaceRegistry', { create: vi.fn(async () => workspace) })
+  ctx.provide('sessionTitle', { rename: vi.fn() })
+  ctx.provide('sessionPersistence', { list: vi.fn(async () => persistedHeaders) })
+  return ctx
+}
+
+/** Preset mounts observed per handle scope. */
+const mountedPresets: string[] = []
+const mount = vi.fn(async (_agentCtx: unknown, presetId: string) => {
+  mountedPresets.push(presetId)
+})
+
+const workspace = {
+  path: '/tmp/workspace',
+  attachSession: vi.fn(async () => {}),
+  detachSession: vi.fn(async () => {}),
+}
+
+/** Followup and dispose spies per handle, keyed by session id. */
+/** Follow-up spies per session id, keyed like the router's handle map. */
+const followups = new Map<string, Mock<(message: FollowupMessage) => void>>()
+const disposes = new Map<string, ReturnType<typeof vi.fn>>()
+/** WhenIdle behavior hooks per handle; default appends one assistant reply. */
+const whenIdleBehaviors = new Map<string, (events: SessionEvent[]) => Promise<void>>()
+
+/** One follow-up user message as the router submits it. */
+interface FollowupMessage {
+  content: { type: string; text: string }[]
+  source: { kind: string }
+}
+
+/** Build one stub agent handle with a synchronous one-reply turn. */
+function buildHandle(sessionId: string): AgentHandle {
+  const events: SessionEvent[] = []
+  const followup = vi.fn((message: FollowupMessage) => {
+    void message
+    events.push({ type: 'user/message', seq: events.length, time: 0, data: {} } as SessionEvent)
+  })
+  followups.set(sessionId, followup)
+  const dispose = vi.fn(async () => {
+    servedHandles.delete(sessionId)
+  })
+  disposes.set(sessionId, dispose)
+  const agent = {
+    session: {
+      id: sessionId,
+      events,
+      header: { agentPreset: 'logged-preset' },
+    },
+    followup,
+    whenIdle: vi.fn(async () => {
+      const hook = whenIdleBehaviors.get(sessionId)
+      if (hook !== undefined) {
+        await hook(events)
+        return
+      }
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: `answer ${String(events.length)}` }] } },
+      } as SessionEvent)
+    }),
+  }
+  return { agent, dispose } as unknown as AgentHandle
+}
+
+/** Build the router over one stubbed context. */
+function router(ctx: Context, live: FeishuSettings): ConversationRouter {
+  return new ConversationRouter(
+    ctx,
+    { workspacePath: workspace.path, agentPreset: 'standard', permissionPreset: 'read-only' },
+    () => live,
+    reply,
+  )
+}
+
+afterEach(() => {
+  reply.mockClear()
+  mount.mockClear()
+  workspace.attachSession.mockClear()
+  workspace.detachSession.mockClear()
+  servedHandles.clear()
+  followups.clear()
+  disposes.clear()
+  whenIdleBehaviors.clear()
+  mountedPresets.length = 0
+  persistedHeaders = []
+  contexts.forEach(context => void context.fiber.dispose())
+  contexts = []
+})
+
+describe('ConversationRouter', () => {
+  it('creates one titled, permissioned session and replies with the turn text', async () => {
+    const ctx = stubbedContext()
+    const live = settings()
+    const title = (ctx.get('sessionTitle') as unknown as { rename: ReturnType<typeof vi.fn> }).rename
+    const presets = ctx.get('permissionPresets') as unknown as { set: ReturnType<typeof vi.fn> }
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    const sessionId = sessionIdForChat('oc_1')
+    expect(followups.get(sessionId)).toHaveBeenCalledOnce()
+    const first = followups.get(sessionId)?.mock.calls[0]?.[0]
+    expect(first?.content[0]?.text).toContain('untrusted external input')
+    expect(first?.content[0]?.text.endsWith('hello')).toBe(true)
+    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
+    expect(presets.set).toHaveBeenCalledWith(expect.anything(), 'read-only')
+    expect(workspace.attachSession).toHaveBeenCalledWith(sessionId)
+    expect(reply).toHaveBeenCalledWith('om_1', expect.stringMatching(/^answer /) as string)
+  })
+
+  it('reuses the live session across turns of one chat', async () => {
+    const ctx = stubbedContext()
+    const create = (ctx.get('agents') as unknown as { create: ReturnType<typeof vi.fn> }).create
+    const subject = router(ctx, settings())
+    subject.accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    subject.accept(message({ messageId: 'om_2' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    expect(create).toHaveBeenCalledOnce()
+    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops retry deliveries of one message identity', async () => {
+    const ctx = stubbedContext()
+    const subject = router(ctx, settings())
+    subject.accept(message())
+    subject.accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledOnce()
+  })
+
+  it('enforces the live allowlist and group mention gates', async () => {
+    const ctx = stubbedContext()
+    const live = settings()
+    live.allowChatIds = ['oc_allowed']
+    const subject = router(ctx, live)
+    subject.accept(message({ chatId: 'oc_other' }))
+    subject.accept(message({ messageId: 'om_g1', chatId: 'oc_allowed', chatType: 'group', mentioned: false, text: 'hi' }))
+    subject.accept(message({ messageId: 'om_g2', chatId: 'oc_allowed', text: '' }))
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    expect(reply).not.toHaveBeenCalled()
+    expect(servedHandles.size).toBe(0)
+    subject.accept(message({ messageId: 'om_g3', chatId: 'oc_allowed', chatType: 'group', mentioned: true, text: 'hi' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+  })
+
+  it('answers with the failure notice when the turn fails', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async () => {
+      throw new Error('turn exploded')
+    })
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+  })
+
+  it('rolls the creation transaction back when workspace attachment fails', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    workspace.attachSession.mockRejectedValueOnce(new Error('attach failed'))
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    expect(disposes.get(sessionId)).toHaveBeenCalledOnce()
+    expect(servedHandles.has(sessionId)).toBe(false)
+  })
+
+  it('resumes a persisted chat session under its durable preset', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    persistedHeaders = [{ id: sessionId }]
+    const agentsStubs = ctx.get('agents') as unknown as { resume: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(agentsStubs.resume).toHaveBeenCalledOnce()
+    expect(agentsStubs.create).not.toHaveBeenCalled()
+    expect(mountedPresets).toContain('logged-preset')
+    expect(workspace.attachSession).not.toHaveBeenCalled()
+  })
+
+  it('truncates replies over the configured limit', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'x'.repeat(5000) }] } },
+      } as SessionEvent)
+    })
+    const live = settings()
+    live.replyCharLimit = 500
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    const text = reply.mock.calls[0]?.[1] as string
+    expect(text.length).toBe(500)
+    expect(text.endsWith('…')).toBe(true)
+  })
+
+  it('serializes messages of one chat behind the active turn', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    let releaseTurn: (() => void) | undefined
+    let turns = 0
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      turns += 1
+      if (turns === 1) {
+        await new Promise<void>((resolve) => {
+          releaseTurn = resolve
+        })
+      }
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'done' }] } },
+      } as SessionEvent)
+    })
+    const subject = router(ctx, settings())
+    subject.accept(message())
+    subject.accept(message({ messageId: 'om_2' }))
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    expect(reply).not.toHaveBeenCalled()
+    releaseTurn?.()
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    const calls = followups.get(sessionId)?.mock.calls ?? []
+    expect(calls[0]?.[0]?.content[0]?.text.endsWith('hello')).toBe(true)
+  })
+})

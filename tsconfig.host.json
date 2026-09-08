@@ -305,6 +305,7 @@
     { "path": "./packages/workflow/tool-ralph" },
     { "path": "./packages/webhook/webhook" },
     { "path": "./packages/webhook/webhook-github" },
+    { "path": "./packages/feishu/feishu" },
     { "path": "./packages/todo/tool-todo" },
     { "path": "./packages/plan/plan-mode" },
     { "path": "./packages/preset/agent-presets" },

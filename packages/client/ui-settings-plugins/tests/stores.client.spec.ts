@@ -19,6 +19,7 @@ import {
   type SubagentModelSelectionSettings,
 } from '../src/client/subagent-model-selection-card-controller.ts'
 import { WebSearchCardController, type WebSearchSettings } from '../src/client/web-search-card-controller.ts'
+import { FeishuCardController, type FeishuSettings } from '../src/client/feishu-card-controller.ts'
 
 /** Make the stub behave like a Host that accepts every write. */
 function acceptWrites<T>(host: StubSettingsScope<T>): void {
@@ -1016,6 +1017,111 @@ describe('WebSearchCardController', () => {
 
     expect(host.set.mock.calls).toEqual([['baseURL', 'https://other.test'], ['maxUses', 3]])
     expect(credentials.set).not.toHaveBeenCalled()
+  })
+})
+
+describe('FeishuCardController', () => {
+  /** Credential domain answering for the Feishu default reference. */
+  function feishuCredentials(configured: boolean) {
+    const describe = vi.fn(() => Promise.resolve({
+      ok: true as const,
+      value: { DSH_FEISHU_APP_SECRET: { configured, writable: true } },
+    }))
+    const set = vi.fn(() => Promise.resolve({ ok: true as const, value: undefined }))
+    return { ctx: ctxWith({ credentials: { describe, set } }), describe, set }
+  }
+
+  it('writes the staged secret through the credentials domain under the default reference', async () => {
+    const host = stubSettingsScope<FeishuSettings>()
+    acceptWrites(host)
+    const credentials = feishuCredentials(false)
+    const controller = new FeishuCardController(host.scope, credentials.ctx)
+    host.publish({ status: 'ready', writable: true, value: {}, user: {} })
+    const face = controller.inject()
+
+    face.edit('appSecret', ' fs-secret ')
+    credentials.describe.mockImplementation(() => Promise.resolve({
+      ok: true as const,
+      value: { DSH_FEISHU_APP_SECRET: { configured: true, writable: true } },
+    }))
+    face.save()
+    await vi.waitFor(() => { expect(credentials.set).toHaveBeenCalled() })
+
+    expect(credentials.set).toHaveBeenCalledWith('DSH_FEISHU_APP_SECRET', 'fs-secret')
+    expect(host.set).not.toHaveBeenCalledWith('appSecret', expect.anything())
+  })
+
+  it('addresses the reference the section declares rather than the default', async () => {
+    const host = stubSettingsScope<FeishuSettings>()
+    const credentials = feishuCredentials(false)
+    const controller = new FeishuCardController(host.scope, credentials.ctx)
+    host.publish({ status: 'ready', writable: true, value: { appSecretEnv: 'FEISHU_SECRET' }, user: {} })
+    const face = controller.inject()
+
+    face.edit('appSecret', 'fs-secret')
+    face.save()
+    await vi.waitFor(() => { expect(credentials.set).toHaveBeenCalled() })
+
+    expect(credentials.set).toHaveBeenCalledWith('FEISHU_SECRET', 'fs-secret')
+  })
+
+  it('stages a valid transport and blocks a draft outside the listed values', () => {
+    const host = stubSettingsScope<FeishuSettings>()
+    acceptWrites(host)
+    const controller = new FeishuCardController(host.scope, feishuCredentials(false).ctx)
+    host.publish({ status: 'ready', writable: true, value: { transport: 'websocket' }, user: {} })
+    const face = controller.inject()
+
+    expect(face.hooks.feishuCard.getSnapshot().transport).toMatchObject({ text: 'websocket', invalid: false })
+
+    face.edit('transport', 'carrier-pigeon')
+    const blocked = face.hooks.feishuCard.getSnapshot()
+    expect(blocked.transport.invalid).toBe(true)
+    expect(blocked.invalid).toBe(true)
+    face.save()
+    expect(host.set).not.toHaveBeenCalled()
+
+    face.edit('transport', 'webhook')
+    face.save()
+    expect(host.set).toHaveBeenCalledWith('transport', 'webhook')
+  })
+
+  it('stages a self-hosted domain origin and blocks a bare hostname', async () => {
+    const host = stubSettingsScope<FeishuSettings>()
+    acceptWrites(host)
+    const controller = new FeishuCardController(host.scope, feishuCredentials(false).ctx)
+    host.publish({ status: 'ready', writable: true, value: { domain: 'feishu' }, user: {} })
+    const face = controller.inject()
+
+    expect(face.hooks.feishuCard.getSnapshot().domain).toMatchObject({ text: 'feishu', invalid: false })
+
+    face.edit('domain', 'https://open.internal.example.com')
+    face.save()
+    await vi.waitFor(() => { expect(host.set).toHaveBeenCalledWith('domain', 'https://open.internal.example.com') })
+
+    face.edit('domain', 'open.internal.example.com')
+    expect(face.hooks.feishuCard.getSnapshot().domain.invalid).toBe(true)
+  })
+
+  it('splits the allowlist draft into chat ids and clears it when left blank', async () => {
+    const host = stubSettingsScope<FeishuSettings>()
+    acceptWrites(host)
+    const controller = new FeishuCardController(host.scope, feishuCredentials(false).ctx)
+    host.publish({ status: 'ready', writable: true, value: { allowChatIds: ['oc_a', 'oc_b'] }, user: {} })
+    const face = controller.inject()
+
+    expect(face.hooks.feishuCard.getSnapshot().allowChatIds.text).toBe('oc_a, oc_b')
+
+    face.edit('allowChatIds', ' oc_c , oc_d ,,')
+    face.save()
+    await vi.waitFor(() => {
+      expect(host.set).toHaveBeenCalledWith('allowChatIds', ['oc_c', 'oc_d'])
+      expect(face.hooks.feishuCard.getSnapshot().dirty).toBe(false)
+    })
+
+    face.edit('allowChatIds', '   ')
+    face.save()
+    await vi.waitFor(() => { expect(host.unset).toHaveBeenCalledWith('allowChatIds') })
   })
 })
 
