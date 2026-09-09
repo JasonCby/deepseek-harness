@@ -110,7 +110,7 @@ export class ConversationRouter {
     if (message.text === '') return
     try {
       const handle = await this.ensureAgent(message.chatId)
-      const fromSeq = handle.agent.session.events.length
+      const fromSeq = handle.agent.session.seq
       handle.agent.followup(createUserMessage({
         content: [{ type: 'text', text: frameChatPrompt(message) }],
         source: {
@@ -122,7 +122,7 @@ export class ConversationRouter {
         },
       }))
       await handle.agent.whenIdle()
-      const replyText = extractReplyText(handle.agent.session.events, fromSeq)
+      const replyText = extractReplyText(handle.agent.session.snapshotEvents(), fromSeq)
       await this.reply(
         message.messageId,
         replyText === undefined
@@ -148,7 +148,7 @@ export class ConversationRouter {
     this.handles.delete(chatId)
     const sessionId = sessionIdForChat(chatId)
     const persisted = (await this.ctx.sessionPersistence.list())
-      .some(header => header.id === sessionId)
+      .some(snapshot => snapshot.header.id === sessionId)
     const handle = persisted
       ? await this.resumeAgent(sessionId)
       : await this.createAgent(sessionId, chatId)
@@ -215,10 +215,10 @@ export class ConversationRouter {
         model: selection.model,
         ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
       },
-      setup: async (agentCtx) => {
+      setup: async (agentCtx, agent) => {
         // The session header's durable preset composed this session's tools;
         // mount exactly it so replayed history stays actionable.
-        const logged = agentCtx.agent?.session.header.agentPreset
+        const logged = agent.session.header.agentPreset
         await this.mount(agentCtx, logged ?? presetId)
       },
     })

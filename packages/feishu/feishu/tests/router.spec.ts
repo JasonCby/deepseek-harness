@@ -8,8 +8,11 @@ import { ConversationRouter, sessionIdForChat } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { InboundMessage } from '../src/types.ts'
 
+/** Every field of a settings section, writable for live-edit tests. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
 /** One mutable settings section the router reads live. */
-function settings(): FeishuSettings {
+function settings(): Mutable<FeishuSettings> {
   return {
     transport: 'websocket',
     domain: 'feishu',
@@ -41,7 +44,7 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 /** The single reply sender the router resolves turns into. */
-const reply = vi.fn(async () => {})
+const reply = vi.fn(async (_messageId: string, _text: string) => {})
 
 /** Handles the stub agent registry served, keyed by session id. */
 const servedHandles = new Map<string, AgentHandle>()
@@ -55,15 +58,18 @@ function stubbedContext(): Context {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('agents', {
-    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown, agent: unknown) => Promise<void> }) => {
       const handle = buildHandle(sessionId)
-      if (setup !== undefined) await setup({ agent: handle.agent })
+      if (setup !== undefined) await setup({}, handle.agent)
       servedHandles.set(sessionId, handle)
       return handle
     }),
-    resume: vi.fn(async ({ resumeSessionId, setup }: { resumeSessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+    resume: vi.fn(async ({ resumeSessionId, setup }: {
+      resumeSessionId: string
+      setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
+    }) => {
       const handle = buildHandle(resumeSessionId)
-      if (setup !== undefined) await setup({ agent: handle.agent })
+      if (setup !== undefined) await setup({}, handle.agent)
       servedHandles.set(resumeSessionId, handle)
       return handle
     }),
@@ -78,7 +84,7 @@ function stubbedContext(): Context {
   ctx.provide('permissionPresets', { resolve: vi.fn(), set: vi.fn() })
   ctx.provide('workspaceRegistry', { create: vi.fn(async () => workspace) })
   ctx.provide('sessionTitle', { rename: vi.fn() })
-  ctx.provide('sessionPersistence', { list: vi.fn(async () => persistedHeaders) })
+  ctx.provide('sessionPersistence', { list: vi.fn(async () => persistedHeaders.map(header => ({ header }))) })
   return ctx
 }
 
@@ -123,6 +129,9 @@ function buildHandle(sessionId: string): AgentHandle {
     session: {
       id: sessionId,
       events,
+      // The V3 read surface the router consumes: next seq and a snapshot copy.
+      get seq() { return events.length },
+      snapshotEvents: () => events,
       header: { agentPreset: 'logged-preset' },
     },
     followup,
@@ -271,7 +280,7 @@ describe('ConversationRouter', () => {
     live.replyCharLimit = 500
     router(ctx, live).accept(message())
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    const text = reply.mock.calls[0]?.[1] as string
+    const text = reply.mock.calls[0]?.[1] ?? ''
     expect(text.length).toBe(500)
     expect(text.endsWith('…')).toBe(true)
   })

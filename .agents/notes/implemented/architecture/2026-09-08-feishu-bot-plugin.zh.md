@@ -10,7 +10,7 @@ harness 此前没有飞书（Lark）集成，而两个看似起点的现有接�
 
 ## Decision
 
-一个插件 `@deepseek-ai/dsh-feishu`：传输无关的核心加两条互斥边。核心把每个聊天映射到确定性 Session id（`feishu-<sha256(chatId).slice(0,32)>`），重启恢复因此只是一次 `sessionPersistence.list()` 的成员检查——创建或 `agents.resume`，无需旁路映射。恢复时挂载会话头中持久的 `agentPreset`，保证重放历史仍可操作。结算在 `followup` 前记录 `session.events.length`，`await agent.whenIdle()`，再从该 seq 起提取 `assistant/message` 文本：持久日志是回复的事实来源。入口只做按 `message_id` 去重（飞书在得到确认前会重推）、允许清单/提及门槛和按会话排队——一切慢操作都在 3 秒确认之后。两条边分别是经 `@larksuiteoapi/node-sdk` 的外拨 WSS 长连接（无需公网地址；token 缓存、心跳、重连归 SDK 所有，且从不调用 `reConnect` 以规避上游定时器泄漏），以及鉴权留在 SDK dispatcher 内的入站 webhook 路由（challenge、AES 信封、签名）。`feishu` 设置命名空间（`installSection`）承载传输、凭据引用、允许清单与回复上限；`workspacePath`/`agentPreset`/`permissionPreset` 仅归组合所有，设置 UI 永远无法提升会话权限。提交的变更经 `EdgeController` 串行 stop/start 链热切换边；回复复用活动边的 API client，凭据变更将二者一并重建。
+一个插件 `@deepseek-ai/dsh-feishu`：传输无关的核心加两条互斥边。核心把每个聊天映射到确定性 Session id（`feishu-<sha256(chatId).slice(0,32)>`），重启恢复因此只是一次 `sessionPersistence.list()` 的成员检查——创建或 `agents.resume`，无需旁路映射。恢复时挂载会话头中持久的 `agentPreset`，保证重放历史仍可操作。结算在 `followup` 前记录 `session.seq`，`await agent.whenIdle()`，再从 `snapshotEvents()` 的该 seq 起提取 `assistant/message` 文本：持久日志是回复的事实来源。入口只做按 `message_id` 去重（飞书在得到确认前会重推）、允许清单/提及门槛和按会话排队——一切慢操作都在 3 秒确认之后。两条边分别是经 `@larksuiteoapi/node-sdk` 的外拨 WSS 长连接（无需公网地址；token 缓存、心跳、重连归 SDK 所有，且从不调用 `reConnect` 以规避上游定时器泄漏），以及鉴权留在 SDK dispatcher 内的入站 webhook 路由（challenge、AES 信封、签名）。`feishu` 设置命名空间（`installSection`）承载传输、凭据引用、允许清单与回复上限；`workspacePath`/`agentPreset`/`permissionPreset` 仅归组合所有，设置 UI 永远无法提升会话权限。提交的变更经 `EdgeController` 串行 stop/start 链热切换边；回复复用活动边的 API client，凭据变更将二者一并重建。
 
 一个不显然的机制：loader 条目处于 realm 隔离，插件上下文里 `ctx.get('webServer')` 解析不到任何东西。可选的 WebServer 因此经 `ctx.inject(['webServer'], …)` 维护一个引用；设置 `validate` 钩子与 webhook 边启动在引用为空时大声失败，引用到位后重跑先前被阻塞的 webhook 边。这一点由 REAL loader 组合测试发现——裸 `Context` 上的单元桩发现不了。
 
@@ -18,7 +18,7 @@ harness 此前没有飞书（Lark）集成，而两个看似起点的现有接�
 
 - 飞书事件重试在 `ConversationRouter.accept` 中、任何排队之前去重；按会话的队列还让会话创建与紧随竞态的第二条消息串行。
 - `whenIdle()` 结算按仓库语义跟随替换工作；按会话的队列阻止后续飞书消息延长结算，但同一会话上并发的 Web UI 输入会被跟随到静默——接受并记录在包 README。
-- 包 README 记录的已知限制：回发为尽力而为（无发件箱）、传输切换或 WSS 断线期间事件丢失、每个飞书应用单实例（集群模式随机单播）、仅文本消息、恢复的会话使用部署默认模型路由、未加密 webhook 依赖路由保密。
+- 包 README 记录的已知限制：回发为尽力而为（无发件箱）、传输切换或 WSS 断线期间事件丢失、每个飞书应用单实例（集群模式随机单播）、仅文本消息、恢复的会话使用部署默认模型路由、未加密 webhook 依赖路由保密。持久日志早于 session 格式 v3 的聊天在恢复时被拒绝（运行时的头版本检查抛错）并以失败提示作答；归档旧日志后同一聊天 id 可开启全新 v3 会话。
 
 ## Alternatives considered
 

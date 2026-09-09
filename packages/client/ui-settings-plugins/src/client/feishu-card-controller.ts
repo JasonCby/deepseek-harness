@@ -42,6 +42,8 @@ export interface FeishuSettings {
   domain?: string
   /** Literal app id; blank inherits the referenced credential. */
   appId?: string
+  /** Credential reference the app secret is read from; blank uses the plugin default. */
+  appSecretEnv?: string
   /** Chats the bot answers; empty answers every chat that reaches it. */
   allowChatIds?: string[]
 }
@@ -235,7 +237,7 @@ function listField(field: string): CardFieldSpec {
  * @param snapshot - the current scope snapshot.
  * @returns the reference to address.
  */
-function refOf(snapshot: SettingsScopeSnapshot<FeishuSettings & { appSecretEnv?: string }>): string {
+function refOf(snapshot: SettingsScopeSnapshot<FeishuSettings>): string {
   const declared = snapshot.value?.appSecretEnv
   return declared !== undefined && declared.length > 0 ? declared : DEFAULT_APP_SECRET_REF
 }

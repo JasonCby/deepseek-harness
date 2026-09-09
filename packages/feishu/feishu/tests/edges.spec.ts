@@ -4,12 +4,15 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ServerResponse, IncomingMessage } from 'node:http'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { EdgeController, startWebhookEdge } from '../src/edges.ts'
-import type { LarkSdk } from '../src/lark.ts'
+import type { LarkApiClient, LarkDispatcher, LarkSdk, LarkWsClient } from '../src/lark.ts'
 import { ConversationRouter } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
 
+/** Every field of a settings section, writable for live-edit tests. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
 /** One mutable settings section the controller reads live. */
-function settings(): FeishuSettings {
+function settings(): Mutable<FeishuSettings> {
   return {
     transport: 'websocket',
     domain: 'feishu',
@@ -39,9 +42,9 @@ interface SdkTrace {
 
 /** Build the fake SDK binding plus its trace. */
 function fakeSdk(): SdkTrace {
-  const wsClients: SdkTrace['wsClients'][] = []
-  const apiClients: SdkTrace['apiClients'][] = []
-  const dispatchers: SdkTrace['dispatchers'][] = []
+  const wsClients: SdkTrace['wsClients'] = []
+  const apiClients: SdkTrace['apiClients'] = []
+  const dispatchers: SdkTrace['dispatchers'] = []
   const trace: SdkTrace = {
     wsClients,
     apiClients,
@@ -52,7 +55,7 @@ function fakeSdk(): SdkTrace {
       createApiClient: () => {
         const client = { reply: vi.fn(async () => ({ code: 0 })) }
         apiClients.push(client)
-        return client
+        return client as unknown as LarkApiClient
       },
       createWsClient: () => {
         const client = {
@@ -60,7 +63,7 @@ function fakeSdk(): SdkTrace {
           close: vi.fn(),
         }
         wsClients.push(client)
-        return client
+        return client as unknown as LarkWsClient
       },
       createDispatcher: () => {
         const handlers = new Map<string, (data: unknown) => unknown>()
@@ -78,7 +81,7 @@ function fakeSdk(): SdkTrace {
           }),
         }
         dispatchers.push(dispatcher)
-        return dispatcher
+        return dispatcher as unknown as LarkDispatcher
       },
       generateChallenge: (data: unknown) => {
         const record = data as { type?: string; challenge?: unknown }
@@ -192,7 +195,7 @@ function fakeRequest(method: string, body: string, headers: Record<string, strin
 
 /** One fake server response capturing status and body. */
 function fakeResponse(): { response: ServerResponse; status(): number | undefined; body(): string } {
-  const captured: { status?: number; body?: string; headers: Record<string, unknown> } = { headers: {} }
+  const captured: { status?: number; body?: string | undefined; headers: Record<string, unknown> } = { headers: {} }
   const response = {
     setHeader: (name: string, value: unknown) => {
       captured.headers[name] = value
@@ -287,8 +290,7 @@ describe('webhook edge handler', () => {
 
   it('rejects an oversized body', async () => {
     const trace = fakeSdk()
-    const live = settings()
-    live.maxBodyBytes = 4
+    const live = { ...settings(), maxBodyBytes: 4 }
     const { handler, stop, ctx } = await webhookHandler(trace, live)
     const oversized = fakeResponse()
     await handler(fakeRequest('POST', 'x'.repeat(10), { 'content-type': 'application/json' }), oversized.response)
