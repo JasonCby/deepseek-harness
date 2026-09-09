@@ -1,12 +1,14 @@
 /** ConversationRouter behavior tests over a real Cordis Context with stubbed core services. */
 
+import type { AttachmentId, FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { ConversationRouter, sessionIdForChat } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
-import type { InboundMessage } from '../src/types.ts'
+import type { InboundAttachment, InboundMessage } from '../src/types.ts'
 
 /** Every field of a settings section, writable for live-edit tests. */
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
@@ -38,6 +40,7 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
     chatType: 'p2p',
     senderOpenId: 'ou_1',
     text: 'hello',
+    attachments: [],
     mentioned: false,
     ...overrides,
   }
@@ -46,8 +49,27 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 /** The single reply sender the router resolves turns into. */
 const reply = vi.fn(async (_messageId: string, _text: string) => {})
 
+/** The resource fetcher the router downloads attachments through. */
+const fetchResourceMock = vi.fn(
+  async (_messageId: string, _attachment: InboundAttachment): Promise<AsyncIterable<Uint8Array>> => attachmentBytes(),
+)
+
+/** One downloaded attachment's byte stream. */
+async function* attachmentBytes(): AsyncIterable<Uint8Array> {
+  yield Uint8Array.of(1, 2, 3)
+}
+
+/** The attachment store's saveFileStream stub, echoing a durable ref per name. */
+const saveFileStream = vi.fn(async ({ name }: { data: AsyncIterable<Uint8Array>; name: string }): Promise<FileAttachmentRef> => ({
+  attachmentId: brandString<AttachmentId>(`att_${name}`),
+  name,
+  bytes: 3,
+}))
+
 /** Handles the stub agent registry served, keyed by session id. */
 const servedHandles = new Map<string, AgentHandle>()
+/** Live agents registered by another surface (the Web UI), keyed by session id. */
+const externalAgents = new Map<string, unknown>()
 /** Session headers the stub persistence lists. */
 let persistedHeaders: { id: string }[] = []
 
@@ -73,7 +95,7 @@ function stubbedContext(): Context {
       servedHandles.set(resumeSessionId, handle)
       return handle
     }),
-    get: (id: string) => servedHandles.get(id)?.agent,
+    get: (id: string) => servedHandles.get(id)?.agent ?? externalAgents.get(id),
   })
   ctx.provide('agentPresets', {
     resolve: vi.fn(async (id: string) => ({ id })),
@@ -85,6 +107,7 @@ function stubbedContext(): Context {
   ctx.provide('workspaceRegistry', { create: vi.fn(async () => workspace) })
   ctx.provide('sessionTitle', { rename: vi.fn() })
   ctx.provide('sessionPersistence', { list: vi.fn(async () => persistedHeaders.map(header => ({ header }))) })
+  ctx.provide('attachments', { saveFileStream })
   return ctx
 }
 
@@ -107,9 +130,16 @@ const disposes = new Map<string, ReturnType<typeof vi.fn>>()
 /** WhenIdle behavior hooks per handle; default appends one assistant reply. */
 const whenIdleBehaviors = new Map<string, (events: SessionEvent[]) => Promise<void>>()
 
+/** One content block of a follow-up user message, text or file. */
+interface FollowupBlock {
+  type: string
+  text?: string
+  attachment?: FileAttachmentRef
+}
+
 /** One follow-up user message as the router submits it. */
 interface FollowupMessage {
-  content: { type: string; text: string }[]
+  content: FollowupBlock[]
   source: { kind: string }
 }
 
@@ -159,15 +189,19 @@ function router(ctx: Context, live: FeishuSettings): ConversationRouter {
     { workspacePath: workspace.path, agentPreset: 'standard', permissionPreset: 'read-only' },
     () => live,
     reply,
+    fetchResourceMock,
   )
 }
 
 afterEach(() => {
   reply.mockClear()
+  fetchResourceMock.mockClear()
+  saveFileStream.mockClear()
   mount.mockClear()
   workspace.attachSession.mockClear()
   workspace.detachSession.mockClear()
   servedHandles.clear()
+  externalAgents.clear()
   followups.clear()
   disposes.clear()
   whenIdleBehaviors.clear()
@@ -189,7 +223,7 @@ describe('ConversationRouter', () => {
     expect(followups.get(sessionId)).toHaveBeenCalledOnce()
     const first = followups.get(sessionId)?.mock.calls[0]?.[0]
     expect(first?.content[0]?.text).toContain('untrusted external input')
-    expect(first?.content[0]?.text.endsWith('hello')).toBe(true)
+    expect((first?.content[0]?.text ?? '').endsWith('hello')).toBe(true)
     expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
     expect(presets.set).toHaveBeenCalledWith(expect.anything(), 'read-only')
     expect(workspace.attachSession).toHaveBeenCalledWith(sessionId)
@@ -242,6 +276,35 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
   })
 
+  it('saves message attachments as file blocks before the text prompt', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    router(ctx, settings()).accept(message({
+      text: '',
+      attachments: [{ kind: 'file', key: 'file_v3_a', name: 'report.pdf' }, { kind: 'image', key: 'img_v3_b' }],
+    }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(fetchResourceMock).toHaveBeenCalledTimes(2)
+    expect(fetchResourceMock).toHaveBeenNthCalledWith(1, 'om_1', { kind: 'file', key: 'file_v3_a', name: 'report.pdf' })
+    expect(fetchResourceMock).toHaveBeenNthCalledWith(2, 'om_1', { kind: 'image', key: 'img_v3_b' })
+    expect(saveFileStream).toHaveBeenCalledTimes(2)
+    expect(saveFileStream).toHaveBeenNthCalledWith(1, expect.objectContaining({ name: 'report.pdf' }))
+    // An image carries no filename, so its resource key names the stored object.
+    expect(saveFileStream).toHaveBeenNthCalledWith(2, expect.objectContaining({ name: 'img_v3_b' }))
+    const submitted = followups.get(sessionId)?.mock.calls[0]?.[0]
+    expect(submitted?.content[0]).toMatchObject({ type: 'file', attachment: { name: 'report.pdf' } })
+    expect(submitted?.content[1]).toMatchObject({ type: 'file', attachment: { name: 'img_v3_b' } })
+    expect(submitted?.content[2]?.text).toContain('Attachments: report.pdf, img_v3_b')
+  })
+
+  it('answers with the failure notice when an attachment download fails', async () => {
+    const ctx = stubbedContext()
+    fetchResourceMock.mockRejectedValueOnce(new Error('download rejected'))
+    router(ctx, settings()).accept(message({ text: '', attachments: [{ kind: 'image', key: 'img_v3_x' }] }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    expect(saveFileStream).not.toHaveBeenCalled()
+  })
+
   it('rolls the creation transaction back when workspace attachment fails', async () => {
     const ctx = stubbedContext()
     const sessionId = sessionIdForChat('oc_1')
@@ -250,6 +313,19 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
     expect(disposes.get(sessionId)).toHaveBeenCalledOnce()
     expect(servedHandles.has(sessionId)).toBe(false)
+  })
+
+  it('borrows a live agent another surface registered instead of resuming', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    externalAgents.set(sessionId, buildHandle(sessionId).agent)
+    const agentsStubs = ctx.get('agents') as unknown as { resume: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(agentsStubs.create).not.toHaveBeenCalled()
+    expect(agentsStubs.resume).not.toHaveBeenCalled()
+    // The borrowed agent received the turn directly.
+    expect(followups.get(sessionId)).toHaveBeenCalledOnce()
   })
 
   it('resumes a persisted chat session under its durable preset', async () => {
@@ -312,6 +388,6 @@ describe('ConversationRouter', () => {
     releaseTurn?.()
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
     const calls = followups.get(sessionId)?.mock.calls ?? []
-    expect(calls[0]?.[0]?.content[0]?.text.endsWith('hello')).toBe(true)
+    expect((calls[0]?.[0]?.content[0]?.text ?? '').endsWith('hello')).toBe(true)
   })
 })

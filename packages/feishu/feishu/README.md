@@ -62,7 +62,7 @@ Each admitted chat message is appended as one `user/message` whose source is `{ 
 
 #### What the model sees
 
-One `user/message` per admitted chat message. The prompt text is one fixed framing line — `Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):` with `{chatId}` and `{senderOpenId}` interpolated (`unknown` when the event carries no sender id) — followed by a blank line and the sender-written message text, which owns no trust and no length bound of its own.
+One `user/message` per admitted chat message. The prompt text is one fixed framing line — `Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):` with `{chatId}` and `{senderOpenId}` interpolated (`unknown` when the event carries no sender id) — followed by a blank line and the sender-written message text, which owns no trust and no length bound of its own. Image and file messages carry one `file` content block per attachment (the LLM runtime projects each to a read-only host path the model reads with its file tools) plus an `Attachments:` line naming them; a message with no text stands in with `(no text; this message carries only attachments)`.
 
 #### Token effect
 
@@ -79,7 +79,8 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 - **Reply delivery is best-effort** — a process crash between turn settlement and the Feishu API call loses that reply; there is no retry queue or durable outbox.
 - **Events during a transport swap are lost** — the WSS long connection has no replay and the webhook route unregisters for the swap window (seconds).
 - **Single instance per Feishu app** — Feishu's cluster mode delivers each event to one random connection, so two DSH processes on one app credential drop events randomly.
-- **Text messages only** — non-text chat types and message cards are dropped at ingress normalization.
+- **Text, image, and file messages only** — other chat types (audio, video, stickers, message cards) are dropped at ingress normalization. Images arrive as file blocks, not native vision: the model reads them through its file tools, and a vision-capable model does not see image bytes natively.
+- **Attachment downloads are in-turn and unretried** — each attachment is downloaded when its message is processed; a download or save failure fails the whole turn with the failure notice, and Feishu caps message resources at 100 MB.
 - **Resumed chats use the deployment's default model route** — a model switch made from the Web UI does not survive a process restart for chat sessions.
 - **Unencrypted webhooks carry no signature check** — with an empty encrypt key the SDK dispatcher accepts unsigned bodies; such deployments rely on route secrecy (see the GitHub webhook guide for the isolated-listener pattern).
 

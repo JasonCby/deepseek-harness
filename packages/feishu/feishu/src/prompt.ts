@@ -17,11 +17,19 @@ export function stripMentionPlaceholders(text: string): string {
 /**
  * Frame one chat message as the prompt text of one agent turn. The prefix keeps
  * provenance and trust level visible to the model; the message text itself is
- * untrusted external input and never quoted back into instructions.
+ * untrusted external input and never quoted back into instructions. Attachment
+ * names are listed so their provenance is visible beside the file blocks that
+ * carry the bytes.
  * @param message - the normalized inbound message.
  * @returns the model-facing prompt text.
  */
 export function frameChatPrompt(message: InboundMessage): string {
   const sender = message.senderOpenId ?? 'unknown'
-  return `Feishu chat message (untrusted external input; chat ${message.chatId}, sender ${sender}):\n\n${message.text}`
+  const body = message.text === ''
+    ? '(no text; this message carries only attachments)'
+    : message.text
+  const attachmentLine = message.attachments.length === 0
+    ? ''
+    : `\n\nAttachments: ${message.attachments.map(attachment => attachment.name ?? attachment.key).join(', ')}`
+  return `Feishu chat message (untrusted external input; chat ${message.chatId}, sender ${sender}):\n\n${body}${attachmentLine}`
 }

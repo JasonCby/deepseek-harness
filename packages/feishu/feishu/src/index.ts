@@ -23,7 +23,7 @@ import { EdgeController } from './edges.ts'
 import type { WebServerRouteRegistrar } from './edges.ts'
 import { larkSdk } from './lark.ts'
 
-export type { InboundMessage, FeishuTransport } from './types.ts'
+export type { InboundMessage, InboundAttachment, FeishuTransport } from './types.ts'
 export {
   Config,
   SettingsConfig,
@@ -46,6 +46,8 @@ export type { LarkSdk, LarkApiClient, LarkDispatcher, LarkWsClient, LarkResponse
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
 export { createReplySender, truncateReply } from './reply.ts'
 export type { ReplySender } from './reply.ts'
+export { createResourceFetcher } from './resource.ts'
+export type { ResourceFetcher } from './resource.ts'
 export { extractReplyText } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
@@ -62,6 +64,7 @@ export const inject = [
   'sessionTitle',
   'sessionPersistence',
   'credentials',
+  'attachments',
 ]
 
 /**
@@ -78,6 +81,7 @@ export function apply(ctx: Context, config: Config): void {
     { workspacePath: config.workspacePath, agentPreset: config.agentPreset, permissionPreset: config.permissionPreset },
     () => source(),
     () => Promise.reject(new Error('feishu: no transport edge is active')),
+    (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
   )
   // Loader entries live in isolated realms, so the optional WebServer is only
   // visible through an explicit inject; the ref tracks its presence live and

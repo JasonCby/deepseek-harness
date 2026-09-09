@@ -62,7 +62,7 @@ kind: "package-reference"
 
 #### 模型可见内容
 
-每条获准消息对应一条 `user/message`。提示词文本为一行固定引导语——`Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):`，其中 `{chatId}` 与 `{senderOpenId}` 为插值（事件未携带发送者 id 时为 `unknown`）——后接空行与发送者撰写的消息文本，后者不具任何信任级别，也无自身长度上限。
+每条获准消息对应一条 `user/message`。提示词文本为一行固定引导语——`Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):`，其中 `{chatId}` 与 `{senderOpenId}` 为插值（事件未携带发送者 id 时为 `unknown`）——后接空行与发送者撰写的消息文本，后者不具任何信任级别，也无自身长度上限。图片与文件消息按附件各携带一个 `file` 内容块（LLM 运行时把每块投影为模型用文件工具读取的只读宿主路径），另有一行列出 `Attachments:` 附件名；无文本的消息以 `(no text; this message carries only attachments)` 占位。
 
 #### Token 效应
 
@@ -79,7 +79,8 @@ kind: "package-reference"
 - **回发为尽力而为** — 轮次结算与飞书 API 调用之间进程崩溃会丢失该回复；没有重试队列或持久化发件箱。
 - **传输切换窗口内事件丢失** — WSS 长连接无补推，webhook 路由在切换窗口（秒级）内注销。
 - **每个飞书应用单实例** — 飞书集群模式将事件随机单播到一条连接，同一应用凭据跑两个 DSH 进程会随机丢事件。
-- **仅文本消息** — 非文本聊天类型与消息卡片在入口归一化处丢弃。
+- **仅文本、图片与文件消息** — 其余聊天类型（语音、视频、表情包、消息卡片）在入口归一化处丢弃。图片以文件块抵达而非原生视觉：模型经文件工具读取，具备视觉能力的模型也不会原生看到图片字节。
+- **附件下载在轮次内且不重试** — 每个附件在其消息被处理时下载；下载或保存失败使整轮以失败提示收场，飞书侧消息资源上限 100 MB。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
 

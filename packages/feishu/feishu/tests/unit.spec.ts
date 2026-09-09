@@ -33,6 +33,7 @@ describe('normalizeEventData', () => {
       chatType: 'p2p',
       senderOpenId: 'ou_1',
       text: 'hello',
+      attachments: [],
       mentioned: false,
     })
   })
@@ -51,10 +52,37 @@ describe('normalizeEventData', () => {
     expect(normalizeEventData(payload)).toMatchObject({ text: 'please review', mentioned: true, chatType: 'group' })
   })
 
-  it('drops app-senders, non-text messages, and malformed shapes', () => {
+  it('normalizes image and file messages into attachments', () => {
+    expect(normalizeEventData(messagePayload({
+      message: {
+        message_id: 'om_img',
+        chat_id: 'oc_1',
+        chat_type: 'p2p',
+        message_type: 'image',
+        content: JSON.stringify({ image_key: 'img_v3_abc' }),
+      },
+    }))).toMatchObject({ text: '', attachments: [{ kind: 'image', key: 'img_v3_abc' }] })
+    expect(normalizeEventData(messagePayload({
+      message: {
+        message_id: 'om_file',
+        chat_id: 'oc_1',
+        chat_type: 'p2p',
+        message_type: 'file',
+        content: JSON.stringify({ file_key: 'file_v3_xyz', file_name: 'report.pdf' }),
+      },
+    }))).toMatchObject({ text: '', attachments: [{ kind: 'file', key: 'file_v3_xyz', name: 'report.pdf' }] })
+  })
+
+  it('drops app-senders, unsupported types, keyless media, and malformed shapes', () => {
     expect(normalizeEventData(messagePayload({ sender: { sender_type: 'app' } }))).toBeUndefined()
     expect(normalizeEventData(messagePayload({
-      message: { message_id: 'om_3', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'image', content: '{}' },
+      message: { message_id: 'om_3', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'audio', content: '{}' },
+    }))).toBeUndefined()
+    expect(normalizeEventData(messagePayload({
+      message: { message_id: 'om_5', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'image', content: '{}' },
+    }))).toBeUndefined()
+    expect(normalizeEventData(messagePayload({
+      message: { message_id: 'om_6', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'file', content: '{"file_name":"a"}' },
     }))).toBeUndefined()
     expect(normalizeEventData('not an object')).toBeUndefined()
     expect(normalizeEventData(null)).toBeUndefined()
@@ -101,12 +129,29 @@ describe('prompt framing', () => {
       chatType: 'p2p',
       senderOpenId: 'ou_1',
       text: 'run the tests',
+      attachments: [],
       mentioned: false,
     })
     expect(prompt).toContain('untrusted external input')
     expect(prompt).toContain('oc_1')
     expect(prompt).toContain('ou_1')
     expect(prompt.endsWith('run the tests')).toBe(true)
+  })
+
+  it('lists attachment names and stands in for empty text', () => {
+    const prompt = frameChatPrompt({
+      messageId: 'om_f1',
+      chatId: 'oc_1',
+      chatType: 'p2p',
+      text: '',
+      attachments: [
+        { kind: 'file', key: 'file_v3_a', name: 'report.pdf' },
+        { kind: 'image', key: 'img_v3_b' },
+      ],
+      mentioned: false,
+    })
+    expect(prompt).toContain('(no text; this message carries only attachments)')
+    expect(prompt).toContain('Attachments: report.pdf, img_v3_b')
   })
 })
 

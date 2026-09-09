@@ -74,6 +74,13 @@ async function compose(): Promise<void> {
       })
       ctx.provide('sessionTitle', { rename: () => {} })
       ctx.provide('sessionPersistence', { list: async () => [] })
+      ctx.provide('attachments', {
+        // This composition pins text-message ingress; an attachment download
+        // reaching the real network would be a defect, so the stub refuses loud.
+        saveFileStream: async () => {
+          throw new Error('unexpected attachment save in loader composition')
+        },
+      })
       ctx.provide('credentials', {
         resolve: async (ref: unknown) => {
           const values: Record<string, string> = {

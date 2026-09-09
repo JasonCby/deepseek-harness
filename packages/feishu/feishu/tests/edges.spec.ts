@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ServerResponse, IncomingMessage } from 'node:http'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { EdgeController, startWebhookEdge } from '../src/edges.ts'
-import type { LarkApiClient, LarkDispatcher, LarkSdk, LarkWsClient } from '../src/lark.ts'
+import type { LarkApiClient, LarkSdk } from '../src/lark.ts'
 import { ConversationRouter } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
 
@@ -34,10 +34,10 @@ function settings(): Mutable<FeishuSettings> {
 interface SdkTrace {
   sdk: LarkSdk
   wsClients: { start: Mock; close: Mock }[]
-  apiClients: { reply: Mock }[]
+  apiClients: { reply: Mock; resourceGet: Mock }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
-  router: { accept: Mock; setReplySender: Mock }
+  router: { accept: Mock; setReplySender: Mock; setResourceFetcher: Mock }
 }
 
 /** Build the fake SDK binding plus its trace. */
@@ -50,10 +50,13 @@ function fakeSdk(): SdkTrace {
     apiClients,
     dispatchers,
     registeredRoutes: [],
-    router: { accept: vi.fn(), setReplySender: vi.fn() },
+    router: { accept: vi.fn(), setReplySender: vi.fn(), setResourceFetcher: vi.fn() },
     sdk: {
       createApiClient: () => {
-        const client = { reply: vi.fn(async () => ({ code: 0 })) }
+        const client = {
+          reply: vi.fn(async () => ({ code: 0 })),
+          resourceGet: vi.fn(async () => ({ getReadableStream: () => { throw new Error('unused in edge tests') } })),
+        }
         apiClients.push(client)
         return client as unknown as LarkApiClient
       },
@@ -63,7 +66,7 @@ function fakeSdk(): SdkTrace {
           close: vi.fn(),
         }
         wsClients.push(client)
-        return client as unknown as LarkWsClient
+        return client
       },
       createDispatcher: () => {
         const handlers = new Map<string, (data: unknown) => unknown>()
@@ -81,7 +84,7 @@ function fakeSdk(): SdkTrace {
           }),
         }
         dispatchers.push(dispatcher)
-        return dispatcher as unknown as LarkDispatcher
+        return dispatcher
       },
       generateChallenge: (data: unknown) => {
         const record = data as { type?: string; challenge?: unknown }
@@ -126,7 +129,7 @@ afterEach(() => {
 })
 
 describe('EdgeController', () => {
-  it('starts the websocket edge and wires its reply sender', async () => {
+  it('starts the websocket edge and wires its reply and download senders', async () => {
     const trace = fakeSdk()
     const ctx = stubbedContext(false)
     const live = settings()
@@ -134,6 +137,7 @@ describe('EdgeController', () => {
     controller.reconfigure()
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setResourceFetcher).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
     controller.dispose()

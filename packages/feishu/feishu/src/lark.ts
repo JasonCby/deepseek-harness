@@ -1,5 +1,6 @@
 /** The Lark SDK surface this package depends on, plus its one production binding. */
 
+import type { Readable } from 'node:stream'
 import { Client, Domain, EventDispatcher, LoggerLevel, WSClient, generateChallenge as sdkGenerateChallenge } from '@larksuiteoapi/node-sdk'
 
 /** Outcome of one outbound Feishu API call; the SDK resolves instead of throwing on API errors. */
@@ -23,9 +24,28 @@ export interface LarkMessageResource {
   }): Promise<LarkResponse>
 }
 
+/** The `im.v1.messageResource` resource of a Lark API client. */
+export interface LarkMessageResourceApi {
+  /**
+   * Download one message's media resource. Unlike reply, HTTP failures throw
+   * rather than resolving a code envelope.
+   * @param params - download type plus message and resource identity.
+   * @returns the download wrapper; the stream is consumable once.
+   */
+  get(params: {
+    params: { type: 'image' | 'file' }
+    path: { message_id: string; file_key: string }
+  }): Promise<{ getReadableStream(): Readable }>
+}
+
 /** The slice of a Lark API client this package uses. */
 export interface LarkApiClient {
-  readonly im: { readonly v1: { readonly message: LarkMessageResource } }
+  readonly im: {
+    readonly v1: {
+      readonly message: LarkMessageResource
+      readonly messageResource: LarkMessageResourceApi
+    }
+  }
 }
 
 /** Lark SDK `EventDispatcher`: registered handlers receive flattened event payloads. */
