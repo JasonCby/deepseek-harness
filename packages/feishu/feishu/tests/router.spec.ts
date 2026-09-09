@@ -41,7 +41,7 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 /** The single reply sender the router resolves turns into. */
-const reply = vi.fn(async () => {})
+const reply = vi.fn(async (_messageId: string, _text: string) => {})
 
 /** Handles the stub agent registry served, keyed by session id. */
 const servedHandles = new Map<string, AgentHandle>()
@@ -210,8 +210,7 @@ describe('ConversationRouter', () => {
 
   it('enforces the live allowlist and group mention gates', async () => {
     const ctx = stubbedContext()
-    const live = settings()
-    live.allowChatIds = ['oc_allowed']
+    const live = { ...settings(), allowChatIds: ['oc_allowed'] }
     const subject = router(ctx, live)
     subject.accept(message({ chatId: 'oc_other' }))
     subject.accept(message({ messageId: 'om_g1', chatId: 'oc_allowed', chatType: 'group', mentioned: false, text: 'hi' }))
@@ -267,8 +266,7 @@ describe('ConversationRouter', () => {
         data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'x'.repeat(5000) }] } },
       } as SessionEvent)
     })
-    const live = settings()
-    live.replyCharLimit = 500
+    const live = { ...settings(), replyCharLimit: 500 }
     router(ctx, live).accept(message())
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
     const text = reply.mock.calls[0]?.[1] as string

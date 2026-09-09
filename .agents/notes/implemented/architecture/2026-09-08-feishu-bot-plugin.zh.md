@@ -19,6 +19,7 @@ harness 此前没有飞书（Lark）集成，而两个看似起点的现有接�
 - 飞书事件重试在 `ConversationRouter.accept` 中、任何排队之前去重；按会话的队列还让会话创建与紧随竞态的第二条消息串行。
 - `whenIdle()` 结算按仓库语义跟随替换工作；按会话的队列阻止后续飞书消息延长结算，但同一会话上并发的 Web UI 输入会被跟随到静默——接受并记录在包 README。
 - 包 README 记录的已知限制：回发为尽力而为（无发件箱）、传输切换或 WSS 断线期间事件丢失、每个飞书应用单实例（集群模式随机单播）、仅文本消息、恢复的会话使用部署默认模型路由、未加密 webhook 依赖路由保密。
+- 落地提交未通过仓库分裂的 tsc 聚合检查：host 聚合暴露其测试问题（trace 的数组套数组注解、扁平的 fake `LarkApiClient`、直接改写 `readonly` 设置字段、裸 `vi.fn()` 签名），client 聚合暴露设置卡 `FeishuSettings` 漏声明 `appSecretEnv` 而 `refOf` 以内联交集参数读取它；vitest 的免类型转译使两者在运行时保持全绿，后续修复仅限类型层面，全部运行时断言不变。
 
 ## Alternatives considered
 

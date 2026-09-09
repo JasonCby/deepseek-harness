@@ -34,7 +34,7 @@ const TRANSPORTS = ['websocket', 'webhook'] as const
 /** Domain shorthands the plugin's settings accept besides a self-hosted origin. */
 const DOMAIN_SHORTHANDS = ['feishu', 'lark'] as const
 
-/** The feishu fields this card edits. */
+/** The feishu section as this card reads it: the fields it edits plus the credential reference it addresses. */
 export interface FeishuSettings {
   /** Ingress transport: outbound long connection or inbound webhook route. */
   transport?: string
@@ -44,6 +44,8 @@ export interface FeishuSettings {
   appId?: string
   /** Chats the bot answers; empty answers every chat that reaches it. */
   allowChatIds?: string[]
+  /** Credential reference the staged app secret is written under; the plugin's default when absent. */
+  appSecretEnv?: string
 }
 
 /** What the credentials domain last reported, and for which reference. */
@@ -235,7 +237,7 @@ function listField(field: string): CardFieldSpec {
  * @param snapshot - the current scope snapshot.
  * @returns the reference to address.
  */
-function refOf(snapshot: SettingsScopeSnapshot<FeishuSettings & { appSecretEnv?: string }>): string {
+function refOf(snapshot: SettingsScopeSnapshot<FeishuSettings>): string {
   const declared = snapshot.value?.appSecretEnv
   return declared !== undefined && declared.length > 0 ? declared : DEFAULT_APP_SECRET_REF
 }

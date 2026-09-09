@@ -39,9 +39,9 @@ interface SdkTrace {
 
 /** Build the fake SDK binding plus its trace. */
 function fakeSdk(): SdkTrace {
-  const wsClients: SdkTrace['wsClients'][] = []
-  const apiClients: SdkTrace['apiClients'][] = []
-  const dispatchers: SdkTrace['dispatchers'][] = []
+  const wsClients: SdkTrace['wsClients'] = []
+  const apiClients: SdkTrace['apiClients'] = []
+  const dispatchers: SdkTrace['dispatchers'] = []
   const trace: SdkTrace = {
     wsClients,
     apiClients,
@@ -50,9 +50,9 @@ function fakeSdk(): SdkTrace {
     router: { accept: vi.fn(), setReplySender: vi.fn() },
     sdk: {
       createApiClient: () => {
-        const client = { reply: vi.fn(async () => ({ code: 0 })) }
-        apiClients.push(client)
-        return client
+        const reply = vi.fn(async () => ({ code: 0 }))
+        apiClients.push({ reply })
+        return { im: { v1: { message: { reply } } } }
       },
       createWsClient: () => {
         const client = {
@@ -141,16 +141,16 @@ describe('EdgeController', () => {
   it('swaps to the webhook edge and back on live settings changes', async () => {
     const trace = fakeSdk()
     const ctx = stubbedContext(true)
-    const live = settings()
+    let live = settings()
     const controller = new EdgeController(ctx, trace.sdk, routerStub(trace), () => live, () => ctx.get('webServer'))
     controller.reconfigure()
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
-    live.transport = 'webhook'
+    live = { ...live, transport: 'webhook' }
     controller.reconfigure()
     await vi.waitFor(() => { expect(stubbedContext.routes.length).toBe(1) })
     expect(trace.wsClients[0]?.close).toHaveBeenCalledOnce()
     expect(stubbedContext.routes[0]?.path).toBe('/feishu')
-    live.transport = 'websocket'
+    live = { ...live, transport: 'websocket' }
     controller.reconfigure()
     await vi.waitFor(() => { expect(stubbedContext.routes.length).toBe(0) })
     expect(trace.wsClients[1]?.start).toHaveBeenCalledOnce()
@@ -192,7 +192,7 @@ function fakeRequest(method: string, body: string, headers: Record<string, strin
 
 /** One fake server response capturing status and body. */
 function fakeResponse(): { response: ServerResponse; status(): number | undefined; body(): string } {
-  const captured: { status?: number; body?: string; headers: Record<string, unknown> } = { headers: {} }
+  const captured: { status?: number; body?: string | undefined; headers: Record<string, unknown> } = { headers: {} }
   const response = {
     setHeader: (name: string, value: unknown) => {
       captured.headers[name] = value
@@ -287,8 +287,7 @@ describe('webhook edge handler', () => {
 
   it('rejects an oversized body', async () => {
     const trace = fakeSdk()
-    const live = settings()
-    live.maxBodyBytes = 4
+    const live = { ...settings(), maxBodyBytes: 4 }
     const { handler, stop, ctx } = await webhookHandler(trace, live)
     const oversized = fakeResponse()
     await handler(fakeRequest('POST', 'x'.repeat(10), { 'content-type': 'application/json' }), oversized.response)

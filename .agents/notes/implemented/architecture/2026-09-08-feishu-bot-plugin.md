@@ -19,6 +19,7 @@ One non-obvious mechanism: loader entries are realm-isolated, so `ctx.get('webSe
 - Feishu event retries are deduplicated in `ConversationRouter.accept` before any queueing; per-chat queues also serialize session creation against a second message racing it.
 - `whenIdle()` settlement follows replacement work by repo semantics; the per-chat queue keeps a later Feishu message from extending settlement, but concurrent Web-UI input on the same session is followed to quiescence — accepted and documented in the package README.
 - Known limits recorded in the package README: best-effort reply delivery (no outbox), events lost during a transport swap or WSS disconnect, single instance per Feishu app (cluster-mode random unicast), text messages only, resumed chats use the deployment's default model route, and unencrypted webhooks rely on route secrecy.
+- The landing commit did not type-check under the repo's split tsc aggregates: the host aggregate caught its tests (array-of-array trace annotations, a flat fake `LarkApiClient`, direct `readonly` settings-field writes, bare `vi.fn()` signatures), and the client aggregate caught the settings card's `FeishuSettings` omitting `appSecretEnv` while `refOf` read it through an inline intersection parameter; vitest's type-free transform kept both green at runtime, and the follow-up repairs are type-level only, leaving every runtime assertion unchanged.
 
 ## Alternatives considered
 
