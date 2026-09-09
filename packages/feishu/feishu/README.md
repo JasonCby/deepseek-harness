@@ -43,7 +43,7 @@ All fields except the last row form the `feishu` settings namespace (`installSec
 <a id="transports"></a>
 ## Transports
 
-- **websocket** — the SDK client (`@larksuiteoapi/node-sdk`) dials out, so no public URL, TLS terminator, or challenge handshake is needed. Feishu requires single-connection semantics per app credential; run one DSH instance per app.
+- **websocket** — the SDK client (`@larksuiteoapi/node-sdk`) dials out, so no public URL, TLS terminator, or challenge handshake is needed. Feishu requires single-connection semantics per app credential; run one DSH instance per app. A credential write re-runs the edge swap through the `credentials/reference-updated` event, so a rotated secret reconnects without a process restart.
 - **webhook** — registers one exact route on the composed WebServer (resolved through an optional `ctx.inject` ref; a webhook section without a WebServer fails the settings `validate` hook and the edge start equally loud). Point a TLS reverse proxy at an isolated listener, as the [overlay example](../../../apps/cli/config/examples/feishu-bot/cordis.yml) shows.
 
 <a id="service-api"></a>

@@ -14,6 +14,7 @@ import {
   SettingsConfig,
   assertConfig,
   assertSettings,
+  credentialRefsOf,
   settingsEntryOf,
 } from './config.ts'
 import type { FeishuSettings } from './config.ts'
@@ -95,6 +96,15 @@ export function apply(ctx: Context, config: Config): void {
       }
     })
   })
+
+  // A credential write does not change the settings section, so the edge swap
+  // above would never re-run for one; the seam's update event closes that gap.
+  ctx.effect(
+    () => ctx.on('credentials/reference-updated', (ref: string) => {
+      if (credentialRefsOf(source()).includes(ref)) controller.reconfigure()
+    }),
+    'feishu: credential updates',
+  )
 
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, FEISHU_SETTINGS_NAMESPACE, SettingsConfig, settingsEntryOf(config), {

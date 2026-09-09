@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { MessageDedup } from '../src/dedup.ts'
-import { assertConfig, assertSettings, type FeishuSettings } from '../src/config.ts'
+import { assertConfig, assertSettings, credentialRefsOf, type FeishuSettings } from '../src/config.ts'
 import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
@@ -197,6 +197,16 @@ describe('settings validation', () => {
     expect(() => {
       assertSettings({ ...base(), allowChatIds: [' x'] })
     }).toThrow(/allowChatIds/)
+  })
+
+  it('lists every credential reference the section consumes', () => {
+    const refs = credentialRefsOf({ ...base(), appSecretEnv: 'FEISHU_SECRET' })
+    expect(refs).toEqual([
+      'DSH_FEISHU_APP_ID',
+      'FEISHU_SECRET',
+      'DSH_FEISHU_VERIFICATION_TOKEN',
+      'DSH_FEISHU_ENCRYPT_KEY',
+    ])
   })
 
   it('rejects an empty workspace path in the composition config', () => {

@@ -43,7 +43,7 @@ kind: "package-reference"
 <a id="transports"></a>
 ## 传输
 
-- **websocket** —— SDK 客户端（`@larksuiteoapi/node-sdk`）外拨建连，因此无需公网地址、TLS 终结或 challenge 握手。飞书对每个应用凭据要求单连接语义；每个应用运行一个 DSH 实例。
+- **websocket** —— SDK 客户端（`@larksuiteoapi/node-sdk`）外拨建连，因此无需公网地址、TLS 终结或 challenge 握手。飞书对每个应用凭据要求单连接语义；每个应用运行一个 DSH 实例。凭据写入经 `credentials/reference-updated` 事件自动重跑边切换，轮换密钥无需重启进程。
 - **webhook** —— 在所组合的 WebServer 上注册一条精确路由（经可选的 `ctx.inject` 引用解析；没有 WebServer 的 webhook 段会被设置 `validate` 钩子与边启动同样大声地拒绝）。将 TLS 反向代理指向隔离监听器，参见 [overlay 示例](../../../apps/cli/config/examples/feishu-bot/cordis.yml)。
 
 <a id="service-api"></a>

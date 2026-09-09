@@ -94,7 +94,7 @@ function sdkDomainOf(domain: string): Domain | string {
   return domain
 }
 
-const loggerLevel = LoggerLevel.warn
+const loggerLevel = Number(process.env.DSH_FEISHU_SDK_LOG_LEVEL ?? LoggerLevel.warn)
 
 /** The production binding over `@larksuiteoapi/node-sdk`. */
 export const larkSdk: LarkSdk = {
