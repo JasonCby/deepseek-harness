@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
+import { act, render } from '@testing-library/react'
 import {
-  chatSnapshot, SlotTestRuntime, TestRemote, stubSettingsScope, usePinnedBrowserLanguages,
+  SlotTestRuntime, TestRemote, stubSettingsScope, usePinnedBrowserLanguages,
 } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
@@ -11,11 +12,14 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   apply as applyConversation, inject as injectConversation,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {
+  ConversationLocationDataSource, ConversationLocationDataStore, ConversationTurnDataMap,
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   apply as applyChat, EMPTY_CHAT_SNAPSHOT, inject as injectChat,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {
-  ChatNodeTurnDataInjected, ChatSnapshot, TranscriptViewRowInjected, UseChat,
+  ChatNodeTurnDataInjected, ChatSnapshot, TranscriptViewRowInjected, UseChatNodeTurnData,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { CHAT_SETTINGS_NAMESPACE, type ChatSettings } from '../src/chat-settings.ts'
 
@@ -37,7 +41,8 @@ async function bench() {
       ? chatSettings.scope
       : stubSettingsScope().scope,
   } as never)
-  runtime.ctx.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() } as never)
+  runtime.ctx.provide('layout', { openRightbar: vi.fn(), closeRightbar: vi.fn() } as never)
+  runtime.ctx.provide('sidebarRight', { openResource: vi.fn() } as never)
   runtime.ctx.provide('uiWorkspace', {
     connectWorkspace: vi.fn(async () => SID),
   } as never)
@@ -49,7 +54,6 @@ async function bench() {
   runtime.slots.installLocale(locale)
   await runtime.root.declare({
     'conversation': { kind: 'single', scope: 'session-maybe' },
-    'details': { kind: 'single', scope: 'session' },
     'conversation.approval.detail': { kind: 'single', scope: 'session' },
     'settings.general.item': { kind: 'list', scope: 'root' },
   }, (_props: { renderSlot?: unknown }) => null)
@@ -64,12 +68,12 @@ async function bench() {
   return { runtime, conversation, chat, chatSettings, sourceDescriptor }
 }
 
-function storeOf(runtime: SlotTestRuntime, key: 'conversation.session' | 'conversation.session.header' | 'conversation.view' | 'details') {
+function storeOf(runtime: SlotTestRuntime, key: 'conversation.session' | 'conversation.session.header' | 'conversation.view') {
   return (runtime.slots.entries(key)[0] as { store?: unknown } | undefined)?.store
 }
 
 describe('Chat apply wiring', () => {
-  it('contributes Chat View, node renderers, stats, and details', async () => {
+  it('contributes Chat View, node renderers, and stats', async () => {
     const b = await bench()
     const views = b.runtime.slots.entries('conversation.view')
     expect(views.map(row => row.options.id)).toEqual(['chat'])
@@ -80,7 +84,6 @@ describe('Chat apply wiring', () => {
       .toEqual(['stats'])
     expect(b.runtime.slots.entries('settings.general.item').map(row => row.options.id))
       .toEqual(['transcript-view', 'composer-enter'])
-    expect(b.runtime.slots.entries('details')).toHaveLength(1)
     await b.runtime.dispose()
   })
 
@@ -107,7 +110,6 @@ describe('Chat apply wiring', () => {
     const conversationStore = storeOf(b.runtime, 'conversation.session')
     const chatStore = storeOf(b.runtime, 'conversation.view')
     expect(storeOf(b.runtime, 'conversation.session.header')).toBe(conversationStore)
-    expect(storeOf(b.runtime, 'details')).toBe(chatStore)
     expect(chatStore).toBeDefined()
     expect(chatStore).not.toBe(conversationStore)
     await b.runtime.dispose()
@@ -149,37 +151,51 @@ describe('Chat apply wiring', () => {
     await b.runtime.dispose()
   })
 
-  it('binds Turn data through the Chat selector hook for Turn and Step locations', async () => {
+  it('binds Turn data directly to its keyed Location source', async () => {
     const b = await bench()
     const spec = b.runtime.slots.spec('conversation.chat.node') as unknown as {
       inject: ChatNodeTurnDataInjected
     }
-    let snapshot: ChatSnapshot = chatSnapshot()
-    const useChat = ((selector: (value: ChatSnapshot) => unknown) => selector(snapshot)) as UseChat
+    let value: number | undefined = 42
+    const listeners = new Set<() => void>()
+    const source: ConversationLocationDataSource<number | undefined> = {
+      getSnapshot: () => value,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    }
+    const data = {
+      get: () => value,
+      source: () => source,
+    } as unknown as ConversationLocationDataStore<ConversationTurnDataMap>
+    const useChat = vi.fn(() => { throw new Error('Turn data must not read the Chat snapshot') })
     const useTurnData = spec.inject.hooks.turnData(
-      { useChat } as Parameters<typeof spec.inject.hooks.turnData>[0],
-      'node-1',
+      { useChat } as unknown as Parameters<typeof spec.inject.hooks.turnData>[0],
+      data,
     )
-    const data = { get: (key: string) => key === 'metric' ? 42 : undefined }
-    const turn = { data }
+    const Probe = ({ useData }: { useData: UseChatNodeTurnData }) => (
+      <output>{useData('metric') ?? 'missing'}</output>
+    )
+    const view = render(<Probe useData={useTurnData} />)
 
-    snapshot = chatSnapshot({
-      nodes: { get: () => ({ location: { kind: 'turn', turn } }), values: () => [] } as never,
-    })
-    expect(useTurnData('metric')).toBe(42)
-    snapshot = chatSnapshot({
-      nodes: { get: () => ({ location: { kind: 'step', turn } }), values: () => [] } as never,
-    })
-    expect(useTurnData('metric')).toBe(42)
-    snapshot = chatSnapshot({
-      nodes: { get: () => ({ location: { kind: 'session' } }), values: () => [] } as never,
-    })
-    expect(useTurnData('metric')).toBeUndefined()
-    snapshot = chatSnapshot({
-      nodes: { get: () => undefined, values: () => [] },
-    })
-    expect(useTurnData('metric')).toBeUndefined()
+    expect(view.getByText('42')).toBeTruthy()
+    expect(useChat).not.toHaveBeenCalled()
 
+    act(() => {
+      value = 43
+      for (const listener of [...listeners]) listener()
+    })
+    expect(view.getByText('43')).toBeTruthy()
+
+    view.rerender(<Probe useData={spec.inject.hooks.turnData(
+      { useChat } as unknown as Parameters<typeof spec.inject.hooks.turnData>[0],
+      undefined,
+    )} />)
+    expect(view.getByText('missing')).toBeTruthy()
+    expect(useChat).not.toHaveBeenCalled()
+
+    view.unmount()
     await b.runtime.dispose()
   })
 })

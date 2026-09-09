@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-With `dsh-tool-web`, the model can search the web and fetch pages through the `web_search` and `web_fetch` tools, backed by the harness web service (`ctx.web`). Choose it when the model should search the web or fetch pages; the two tools register independently, so a product disables either via config. Every successful result labels provider-controlled text as external and untrusted, and HTML conversion removes active or hidden content. Tools stay visible even when their selected provider is missing or unavailable: execution then fails with a structured error the model can read. Neither tool exposes a model-facing timeout; per-tool budgets are deployment config enforced by the timeout policy.
+`dsh-tool-web` lets models search the web with `web_search` and retrieve pages with `web_fetch`. Choose it when an agent needs current information or full source text, and enable either tool independently through package configuration. Results label provider-controlled text as external and untrusted, while fetched HTML excludes active and hidden content. If a configured provider is missing or unavailable, the tool remains visible and returns a structured error the model can act on. Timeout and result-size limits are deployment settings rather than model arguments.
 
 ## Table of Contents
 
@@ -103,7 +103,7 @@ The package is built on one separation and one registration rule:
 | [`src/index.ts`](src/index.ts) | Plugin entry: config schema, enablement, timeout budgets, tool registration |
 | [`src/search.ts`](src/search.ts) | The `web_search` tool: argument validation, query fan-out, merge, formatting, presentation meta |
 | [`src/fetch.ts`](src/fetch.ts) | The `web_fetch` tool: HTML→markdown conversion, output caps, formatting, presentation meta |
-| [`src/invariant.ts`](src/invariant.ts) | Invariant companion (no runtime invariant; contracts are enforced at the tools) |
+| — | No runtime invariant companion is published; this model-facing adapter has no independent lifecycle stream; execution relations are owned by the capability seam it calls. |
 
 ### Search flow
 

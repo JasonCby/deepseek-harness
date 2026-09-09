@@ -135,13 +135,15 @@ root
 │  │     │  ├─ conversation.chat.commandview
 │  │     │  ├─ conversation.chat.turnTail
 │  │     │  └─ tool.call.toolview
+│  │     │     ├─ tool.call.images
 │  │     │     └─ tool.view.cordis
 │  │     ├─ conversation.message.images
 │  │     └─ conversation.trajectory.images
 │  ├─ conversation.session.header
 │  │  ├─ conversation.session.header.lineage
 │  │  ├─ conversation.session.header.actions
-│  │  └─ conversation.session.header.utilities
+│  │  ├─ conversation.session.header.utilities
+│  │  └─ conversation.session.header.corner
 │  ├─ conversation.composer
 │  │  └─ conversation.approval.detail
 │  ├─ conversation.composer.bar
@@ -157,8 +159,11 @@ root
 │  ├─ conversation.hero.workspace
 │  │  └─ conversation.hero.workspace.directoryFlow
 │  └─ conversation.hero.agentPreset
-├─ details
-│  └─ conversation.details.tool
+├─ rightbar
+│  ├─ sidebar.right.pane.tab
+│  │  └─ sidebar.right.tab.guide
+│  ├─ sidebar.right.pane.tab.title
+│  └─ sidebar.right.tab.menu.item
 └─ shell.overlay
 ```
 

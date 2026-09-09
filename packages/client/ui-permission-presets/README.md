@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package provides permission preset surfaces for two lifetimes in the Web GUI: a General-settings row chooses the default for later sessions without switching the current session. A picker on the host `/permission` command switches the current session through one flat preset list with the active value marked. Canonical built-in names render as locale-owned product labels, explicit host labels remain unchanged, and unknown kebab-case names render in title case. Choosing full access requires an explicit risk acknowledgement before either surface writes it. Both surfaces read one host-computed projection and write through one path, so the pushed projection frame is the single confirmation both follow.
+Use this package to choose Web GUI permission presets for future sessions or switch the current session. The General settings row changes only the default for sessions created later, while the `/permission` picker changes only the current session and marks its active preset. Built-in presets use localized labels; explicit host labels remain unchanged, and unknown kebab-case names appear in title case. Full access always requires explicit risk acknowledgement. Both surfaces confirm changes only after the host pushes the resulting permission state.
 
 ## Table of Contents
 
@@ -89,3 +89,5 @@ These limits define the current permission surfaces. They are current package co
 None.
 
 </details>
+
+**Runtime invariant:** No companion is published. The command and slot contribution lifecycles are proven by the HMR-safety spec, while the browser-only Settings controller owns no host events or cross-plugin mutable state.

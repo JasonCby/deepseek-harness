@@ -73,7 +73,7 @@ Platform tools run without a shell: `osascript` on macOS, and Zenity with a KDia
 Read these when the backend contract is not enough: the seam definition first, then the alternative backend and the chooser that selects between them.
 
 - [Directory-picker seam](../directory-picker/README.md) — the `native` capability contract and the typed error vocabulary.
-- [Directory-picker capability seam decision](../../../.agents/notes/implemented/architecture/2026-07-28-directory-picker-capability-seam.md) — why backends differ in interaction shape.
+- [Directory-picker capability seam decision](../../../.agents/notes/archived/architecture/2026-07-28-directory-picker-capability-seam.md) — why backends differ in interaction shape.
 - [Browse backend](../directory-picker-browse/README.md) — the in-app alternative for remote clients.
 - [Adaptive chooser](../directory-picker-auto/README.md) — boot-time resolution between native and browse.
 - [No-shell subprocess runner](../../util/native-command/README.md) — the shared subprocess primitive the chooser runs on.
@@ -108,3 +108,5 @@ These limits define when the native interaction is unavailable or fragile. They 
 None.
 
 </details>
+
+**Runtime invariant:** No companion is published. Each pick is one stateless subprocess round trip; the chooser outcome is only the returned path.

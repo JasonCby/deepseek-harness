@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-schedule` 为你的会话提供持久的提醒：让模型稍后提醒你，提醒会作为同一会话中的普通 follow-up 消息返回。你可以安排延时后的一次性提醒、绝对时间的一次性提醒，或固定间隔的重复提醒，也可以列出仍待处理的提醒或取消提醒。提醒在重启后依然存在：已经 live 且空闲的 agent 可以立即交付到期工作，而已关闭或 cold 的会话会让提醒保持逾期，直到未来的 live 根 agent 恢复会话。交付只发生在会话内部，没有电子邮件、短信或推送通知。它是可选的 Web 能力；加载 Schedule overlay 即可启用提醒工具与只读活动提醒目录。普通与搜索侧边栏行还会在尽力而为的列表 projection 明确非空时显示不可交互的闹钟；该闹钟不保证 live runtime 存在。
+Schedule 让你向模型请求持久提醒；提醒会作为普通 follow-up 消息返回同一会话。你可以创建延时或绝对时间的一次性提醒、按固定间隔重复提醒、列出待处理提醒，也可以取消提醒。提醒在重启后仍然存在，但交付需要 live 根 agent：已关闭的会话会让提醒保持逾期，直到恢复。交付绝不会使用电子邮件、短信、推送或浏览器通知。启用 Schedule overlay 即可提供提醒工具和活动提醒目录；侧边栏闹钟只是已知活动提醒的尽力而为指示，不证明提醒交付当前正在运行。
 
 ## 目录
 
@@ -98,11 +98,11 @@ Session projection 是可选能力。`ctx.sessionProjections` 存在时，插件
 
 ### 持久状态与回放
 
-普通会话折叠完整事件流。fork 只折叠 `session.events.slice(session.header.seedLength ?? 0)`，因此子会话永远不会继承父会话的提醒。Schedule projection 从传给 `init(header)` 的不可变 `SessionHeader` 派生该边界，并对同一自有后缀应用同一个 transition 函数。每条 create 记录都携带稳定的会话本地 `ScheduleId`、已 trim 的提示词与四位年份 RFC 3339 UTC `scheduledAt`；`after` 记录还存储 `afterSeconds`，`at` 记录不保留所提交的偏移量或本地字段，`every` 记录存储 `everySeconds`，并把 `scheduledAt` 视为尚未 dispatch 的最早创建锚点对齐发生时点。delete 与一次性 dispatch 只携带 id；`every` dispatch 会附加 `acceptedAt`，回放直接推进到该决策时点之后的第一个锚点对齐目标。
+普通会话折叠完整事件流。fork 只折叠 `session.ownEvents()`，因此子会话永远不会继承父会话的提醒。Schedule projection 从投影注册表接收 Session 的精确 `inheritedEventCount`，并在该切点之后应用同一个 transition 函数。每条 create 记录都携带稳定的会话本地 `ScheduleId`、已 trim 的提示词与四位年份 RFC 3339 UTC `scheduledAt`；`after` 记录还存储 `afterSeconds`，`at` 记录不保留所提交的偏移量或本地字段，`every` 记录存储 `everySeconds`，并把 `scheduledAt` 视为尚未 dispatch 的最早创建锚点对齐发生时点。delete 与一次性 dispatch 只携带 id；`every` dispatch 会附加 `acceptedAt`，回放直接推进到该决策时点之后的第一个锚点对齐目标。
 
 ### 客户端 projection
 
-可选的 `schedule` projection 将 `{ seedLength, active, seenIds }` 作为严格的纯 JSON 检查点，并且只发布完整的 `active` 数组。其 schema 复用持久 Schedule decoder，拒绝重复或不一致的 id，并让损坏的持久事件通过既有 Session 读取失败传播，而不是发布部分目录。live 惰性构建、事件驱动构建、cold restore、history 读取与 detached Subagent 读取都使用不可变 Session header 与同一套自有后缀 transition。
+可选的 `schedule` projection 将 `{ inheritedEventCount, active, seenIds }` 作为严格的纯 JSON 检查点，并且只发布完整的 `active` 数组。其 schema 复用持久 Schedule decoder，拒绝重复或不一致的 id，并让损坏的持久事件通过既有 Session 读取失败传播，而不是发布部分目录。live 惰性构建、事件驱动构建、cold restore、history 读取与 detached Subagent 读取都使用精确 Session 切点与同一套自有后缀 transition。
 
 projection 只携带持久记录。它不持久化或传输 scheduled／overdue 状态、本地化文本、相对时间、浏览器本地时间、排序状态、popover 状态、runtime 存活或交付回执。[`dsh-client-ui-schedule`](../../client/ui-schedule/README.zh.md) 从完整数组与查看方浏览器时钟派生目录呈现。[`dsh-client-ui-workspace`](../../client/ui-workspace/README.zh.md) 只派生列表值是否为非空数组，因此持久 projection cache 缺失或陈旧时，普通行与搜索结果的闹钟可能短暂漏显或残留。
 
@@ -134,9 +134,9 @@ owner 把长等待拆分为有界的 timer 段，并在每次唤醒后重新读�
 - [仅限会话内的 Schedule 子系统](../../../docs/subsystems/schedule.zh.md)——带精确类型定义的持久记录、转换、视图与交付约定。
 - [生成的工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-schedule)——模型接收的 `schedule_create`、`schedule_list` 与 `schedule_delete` 完整 schema。
 - [持久 Web Schedule 决策](../../../.agents/notes/implemented/feature/2026-08-05-durable-web-schedule.zh.md)——本包背后的持久化与生命周期决策。
-- [对话式交付决策](../../../.agents/notes/implemented/simplification/2026-08-09-conversational-schedule-delivery.zh.md)——无回执边界与 follow-up 交付。
+- [对话式交付决策](../../../.agents/notes/archived/simplification/2026-08-09-conversational-schedule-delivery.md)——无回执边界与 follow-up 交付。
 - [显式时区边界](../../../.agents/notes/implemented/simplification/2026-08-09-explicit-schedule-time-zone.zh.md)——为什么模型必须始终传入显式时区。
-- [有界固定速率 Schedule](../../../.agents/notes/implemented/simplification/2026-08-09-bounded-fixed-rate-schedule.zh.md)——重复调度范围：只追赶最新一次与批次交付。
+- [有界固定速率 Schedule](../../../.agents/notes/archived/simplification/2026-08-09-bounded-fixed-rate-schedule.md)——重复调度范围：只追赶最新一次与批次交付。
 - [Schedule 用户指南](../../../docs/user/guide/schedule.zh.md)——挂载本包与 time-context 的官方配置路径。
 
 -----
