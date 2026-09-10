@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话映射到一个多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。
+`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话映射到一个多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 以纯文本或单张 markdown 卡片回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。
 
 ## 目录
 
@@ -34,7 +34,8 @@ kind: "package-reference"
 | `path` / `maxBodyBytes` | webhook 路由路径（默认 `/feishu`）与请求体上限（默认 65536）。 |
 | `allowChatIds` | 机器人应答的会话；为空（默认）时应答到达机器人的每个会话。 |
 | `groupRequireMention` | 群聊中仅应答被提及的消息（默认 `true`）。 |
-| `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000）与失败回复文案。 |
+| `replyForm` / `cardTitle` | 回复形式：`text`（默认）或 `card`（单张 markdown 卡片）；`cardTitle` 为卡片头标题（默认 `DSH`）。 |
+| `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000，两种形式共用）与失败回复文案。 |
 | `dedupCapacity` | 重试去重所记住的消息标识数（默认 1024）。 |
 | `workspacePath` / `agentPreset` / `permissionPreset` | 仅部署层：会话的工作区、agent 组合与沙箱/审批预设。绝不可经设置修改。 |
 
@@ -53,6 +54,7 @@ kind: "package-reference"
 - `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复、从会话日志结算轮次。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
+- `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。
 
 每条获准的聊天消息追加为一条 `user/message`，source 为 `{ kind: 'feishu', chatId, messageId, form: 'notice', summary }`（声明合并进 `MessageSourceMap`）。
 
@@ -79,7 +81,8 @@ kind: "package-reference"
 - **回发为尽力而为** — 轮次结算与飞书 API 调用之间进程崩溃会丢失该回复；没有重试队列或持久化发件箱。
 - **传输切换窗口内事件丢失** — WSS 长连接无补推，webhook 路由在切换窗口（秒级）内注销。
 - **每个飞书应用单实例** — 飞书集群模式将事件随机单播到一条连接，同一应用凭据跑两个 DSH 进程会随机丢事件。
-- **仅文本消息** — 非文本聊天类型与消息卡片在入口归一化处丢弃。
+- **入站仅文本消息** — 非文本聊天类型与消息卡片在入口归一化处丢弃；出站回复按所配 `replyForm` 取文本或卡片。
+- **飞书 markdown 为子集** — 卡片回复按飞书 markdown 方言渲染；GFM 表格等不支持的语法在卡片中降级。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
 
@@ -89,6 +92,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)。
 
 </details>

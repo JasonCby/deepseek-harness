@@ -22,7 +22,7 @@ import { EdgeController } from './edges.ts'
 import type { WebServerRouteRegistrar } from './edges.ts'
 import { larkSdk } from './lark.ts'
 
-export type { InboundMessage, FeishuTransport } from './types.ts'
+export type { InboundMessage, FeishuTransport, ReplyForm } from './types.ts'
 export {
   Config,
   SettingsConfig,
@@ -43,8 +43,10 @@ export { normalizeEventData } from './ingress.ts'
 export { larkSdk } from './lark.ts'
 export type { LarkSdk, LarkApiClient, LarkDispatcher, LarkWsClient, LarkResponse } from './lark.ts'
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
+export { renderMarkdownCard } from './card.ts'
+export type { FeishuCard } from './card.ts'
 export { createReplySender, truncateReply } from './reply.ts'
-export type { ReplySender } from './reply.ts'
+export type { ReplySender, ReplyContent } from './reply.ts'
 export { extractReplyText } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 

@@ -1,7 +1,7 @@
 /** Plugin configuration and the UI-editable settings section derived from it. */
 
 import z from '@deepseek-ai/schemastery'
-import type { FeishuTransport } from './types.ts'
+import type { FeishuTransport, ReplyForm } from './types.ts'
 
 /** Default credential reference naming the Feishu app id. */
 export const DEFAULT_APP_ID_ENV = 'DSH_FEISHU_APP_ID'
@@ -46,6 +46,10 @@ export interface FeishuSettings {
   readonly groupRequireMention: boolean
   /** Reply texts longer than this are truncated with an ellipsis marker. */
   readonly replyCharLimit: number
+  /** Form settled replies take: plain text or a single markdown card. */
+  readonly replyForm: ReplyForm
+  /** Card header title when {@link FeishuSettings.replyForm} is `card`. */
+  readonly cardTitle: string
   /** Text replied when message processing fails before a reply exists. */
   readonly failureNotice: string
   /** Maximum remembered message identities for retry deduplication. */
@@ -76,6 +80,8 @@ const settingsFields = {
   allowChatIds: z.array(z.string()).default([]),
   groupRequireMention: z.boolean().default(true),
   replyCharLimit: z.number().step(1).min(200).default(4000),
+  replyForm: z.union(['text', 'card'] as const).default('text'),
+  cardTitle: z.string().default('DSH'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
 }
@@ -107,6 +113,8 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     allowChatIds: config.allowChatIds,
     groupRequireMention: config.groupRequireMention,
     replyCharLimit: config.replyCharLimit,
+    replyForm: config.replyForm,
+    cardTitle: config.cardTitle,
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
   }
@@ -129,6 +137,9 @@ export function assertSettings(value: FeishuSettings): void {
   }
   if (value.failureNotice.trim() === '') {
     throw new Error('feishu failureNotice must be non-empty')
+  }
+  if (value.cardTitle.trim() === '') {
+    throw new Error('feishu cardTitle must be non-empty')
   }
   if (value.allowChatIds.some(id => id.trim() !== id || id === '')) {
     throw new Error('feishu allowChatIds entries must be non-empty trimmed strings')

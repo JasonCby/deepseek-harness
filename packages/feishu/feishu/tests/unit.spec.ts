@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { MessageDedup } from '../src/dedup.ts'
+import { renderMarkdownCard } from '../src/card.ts'
 import { assertConfig, assertSettings, type FeishuSettings } from '../src/config.ts'
 import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
@@ -110,6 +111,15 @@ describe('prompt framing', () => {
   })
 })
 
+describe('renderMarkdownCard', () => {
+  it('projects settled markdown under the configured title', () => {
+    expect(renderMarkdownCard('done', 'Ops')).toEqual({
+      header: { template: 'blue', title: { tag: 'plain_text', content: 'Ops' } },
+      elements: [{ tag: 'markdown', content: 'done' }],
+    })
+  })
+})
+
 describe('truncateReply', () => {
   it('keeps short text and truncates long text', () => {
     expect(truncateReply('short', 10)).toBe('short')
@@ -165,6 +175,8 @@ describe('settings validation', () => {
       allowChatIds: [],
       groupRequireMention: true,
       replyCharLimit: 4000,
+      replyForm: 'text',
+      cardTitle: 'DSH',
       failureNotice: 'failed',
       dedupCapacity: 1024,
     }
@@ -197,6 +209,9 @@ describe('settings validation', () => {
     expect(() => {
       assertSettings({ ...base(), allowChatIds: [' x'] })
     }).toThrow(/allowChatIds/)
+    expect(() => {
+      assertSettings({ ...base(), cardTitle: ' ' })
+    }).toThrow(/cardTitle/)
   })
 
   it('rejects an empty workspace path in the composition config', () => {

@@ -12,8 +12,9 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
+import { renderMarkdownCard } from './card.ts'
 import { frameChatPrompt } from './prompt.ts'
-import type { ReplySender } from './reply.ts'
+import type { ReplyContent, ReplySender } from './reply.ts'
 import { extractReplyText } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
@@ -103,6 +104,18 @@ export class ConversationRouter {
     return true
   }
 
+  /**
+   * Resolve the configured reply form onto one settled text.
+   * @param text - the settled reply text or failure notice, already truncated.
+   * @param settings - the currently authoritative settings section.
+   * @returns the payload the active transport delivers.
+   */
+  private payload(text: string, settings: FeishuSettings): ReplyContent {
+    return settings.replyForm === 'card'
+      ? { kind: 'card', card: renderMarkdownCard(text, settings.cardTitle) }
+      : { kind: 'text', text }
+  }
+
   /** Process one admitted message end-to-end; never rejects. */
   private async process(message: InboundMessage): Promise<void> {
     const settings = this.settings()
@@ -123,16 +136,14 @@ export class ConversationRouter {
       }))
       await handle.agent.whenIdle()
       const replyText = extractReplyText(handle.agent.session.events, fromSeq)
-      await this.reply(
-        message.messageId,
-        replyText === undefined
-          ? settings.failureNotice
-          : truncateReply(replyText, settings.replyCharLimit),
-      )
+      const settled = replyText === undefined
+        ? settings.failureNotice
+        : truncateReply(replyText, settings.replyCharLimit)
+      await this.reply(message.messageId, this.payload(settled, settings))
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
       try {
-        await this.reply(message.messageId, settings.failureNotice)
+        await this.reply(message.messageId, this.payload(settings.failureNotice, settings))
       } catch (noticeError: unknown) {
         // The failure notice shares the credentials and client of the failed
         // turn; a second refusal carries no additional signal.

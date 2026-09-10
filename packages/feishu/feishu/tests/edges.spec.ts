@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { EdgeController, startWebhookEdge } from '../src/edges.ts'
 import type { LarkSdk } from '../src/lark.ts'
 import { ConversationRouter } from '../src/conversation.ts'
+import { renderMarkdownCard } from '../src/card.ts'
+import type { ReplySender } from '../src/reply.ts'
 import type { FeishuSettings } from '../src/config.ts'
+import type { InboundMessage } from '../src/types.ts'
 
 /** One mutable settings section the controller reads live. */
 function settings(): FeishuSettings {
@@ -22,6 +25,8 @@ function settings(): FeishuSettings {
     allowChatIds: [],
     groupRequireMention: true,
     replyCharLimit: 4000,
+    replyForm: 'text',
+    cardTitle: 'DSH',
     failureNotice: 'failed',
     dedupCapacity: 64,
   }
@@ -47,10 +52,16 @@ function fakeSdk(): SdkTrace {
     apiClients,
     dispatchers,
     registeredRoutes: [],
-    router: { accept: vi.fn(), setReplySender: vi.fn() },
+    router: {
+      accept: vi.fn((_message: InboundMessage) => {}),
+      setReplySender: vi.fn((_sender: ReplySender) => {}),
+    },
     sdk: {
       createApiClient: () => {
-        const reply = vi.fn(async () => ({ code: 0 }))
+        const reply = vi.fn(async (_params: {
+          path: { message_id: string }
+          data: { msg_type: 'text' | 'interactive'; content: string }
+        }) => ({ code: 0 }))
         apiClients.push({ reply })
         return { im: { v1: { message: { reply } } } }
       },
@@ -135,6 +146,22 @@ describe('EdgeController', () => {
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
     controller.dispose()
     expect(trace.wsClients[0]?.close).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
+  it('delivers card payloads as interactive replies', async () => {
+    const trace = fakeSdk()
+    const ctx = stubbedContext(false)
+    const controller = new EdgeController(ctx, trace.sdk, routerStub(trace), () => settings(), () => undefined)
+    controller.reconfigure()
+    await vi.waitFor(() => { expect(trace.router.setReplySender).toHaveBeenCalledOnce() })
+    const sender = trace.router.setReplySender.mock.calls[0]?.[0]
+    if (sender === undefined) throw new Error('sender was not wired')
+    await sender('om_1', { kind: 'card', card: renderMarkdownCard('done', 'Ops') })
+    const call = trace.apiClients[0]?.reply.mock.calls[0]?.[0]
+    expect(call?.data.msg_type).toBe('interactive')
+    expect(JSON.parse(call?.data.content ?? '{}')).toMatchObject({ header: { title: { content: 'Ops' } } })
+    controller.dispose()
     await ctx.fiber.dispose()
   })
 

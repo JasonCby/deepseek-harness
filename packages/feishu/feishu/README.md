@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat maps to one multi-turn root Session; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes.
+`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat maps to one multi-turn root Session; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API as plain text or one markdown card. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes.
 
 ## Table of Contents
 
@@ -34,7 +34,8 @@ English | [中文](README.zh.md)
 | `path` / `maxBodyBytes` | Webhook route path (default `/feishu`) and body ceiling (default 65536). |
 | `allowChatIds` | Chats the bot answers; empty (default) answers every chat that reaches it. |
 | `groupRequireMention` | In groups, answer only mentioned messages (default `true`). |
-| `replyCharLimit` / `failureNotice` | Reply truncation bound (default 4000) and the failure reply text. |
+| `replyForm` / `cardTitle` | Reply form: `text` (default) or `card` (one markdown card); `cardTitle` is the card header title (default `DSH`). |
+| `replyCharLimit` / `failureNotice` | Reply truncation bound (default 4000, shared by both forms) and the failure reply text. |
 | `dedupCapacity` | Remembered message identities for retry deduplication (default 1024). |
 | `workspacePath` / `agentPreset` / `permissionPreset` | Deployment-only: the sessions' workspace, agent composition, and sandbox/approval preset. Never editable through settings. |
 
@@ -53,6 +54,7 @@ All fields except the last row form the `feishu` settings namespace (`installSec
 - `ConversationRouter` — dedup by message id, per-chat queueing, session create/resume, turn settlement from the session log.
 - `EdgeController` — serialized edge lifecycle; `reconfigure()` stops the active edge and starts the one the current settings select.
 - `larkSdk` — the narrow SDK surface (`createApiClient`, `createWsClient`, `createDispatcher`, `generateChallenge`), injectable in tests.
+- `renderMarkdownCard` — the pure settled-text → card-JSON-1.0 projection (fixed blue header carrying `cardTitle`, one markdown element) the `card` reply form sends.
 
 Each admitted chat message is appended as one `user/message` whose source is `{ kind: 'feishu', chatId, messageId, form: 'notice', summary }` (declaration-merged into `MessageSourceMap`).
 
@@ -79,7 +81,8 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 - **Reply delivery is best-effort** — a process crash between turn settlement and the Feishu API call loses that reply; there is no retry queue or durable outbox.
 - **Events during a transport swap are lost** — the WSS long connection has no replay and the webhook route unregisters for the swap window (seconds).
 - **Single instance per Feishu app** — Feishu's cluster mode delivers each event to one random connection, so two DSH processes on one app credential drop events randomly.
-- **Text messages only** — non-text chat types and message cards are dropped at ingress normalization.
+- **Inbound text messages only** — non-text chat types and message cards are dropped at ingress normalization; outbound replies take the configured `replyForm` (text or card).
+- **Feishu markdown is a subset** — card-form replies render in Feishu's markdown dialect; GFM tables and other unsupported syntax degrade inside the card.
 - **Resumed chats use the deployment's default model route** — a model switch made from the Web UI does not survive a process restart for chat sessions.
 - **Unencrypted webhooks carry no signature check** — with an empty encrypt key the SDK dispatcher accepts unsigned bodies; such deployments rely on route secrecy (see the GitHub webhook guide for the isolated-listener pattern).
 
@@ -88,6 +91,6 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md).
+The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md). Card replies are recorded in [their own note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.md).
 
 </details>

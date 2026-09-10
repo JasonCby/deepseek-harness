@@ -19,7 +19,7 @@ export interface LarkMessageResource {
    */
   reply(params: {
     path: { message_id: string }
-    data: { msg_type: 'text'; content: string }
+    data: { msg_type: 'text' | 'interactive'; content: string }
   }): Promise<LarkResponse>
 }
 

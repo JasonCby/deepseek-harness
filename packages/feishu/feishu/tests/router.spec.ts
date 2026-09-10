@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { ConversationRouter, sessionIdForChat } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
+import type { ReplyContent } from '../src/reply.ts'
 import type { InboundMessage } from '../src/types.ts'
 
 /** One mutable settings section the router reads live. */
@@ -22,6 +23,8 @@ function settings(): FeishuSettings {
     allowChatIds: [],
     groupRequireMention: true,
     replyCharLimit: 4000,
+    replyForm: 'text',
+    cardTitle: 'DSH',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
   }
@@ -41,7 +44,7 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 /** The single reply sender the router resolves turns into. */
-const reply = vi.fn(async (_messageId: string, _text: string) => {})
+const reply = vi.fn(async (_messageId: string, _content: ReplyContent) => {})
 
 /** Handles the stub agent registry served, keyed by session id. */
 const servedHandles = new Map<string, AgentHandle>()
@@ -184,7 +187,7 @@ describe('ConversationRouter', () => {
     expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
     expect(presets.set).toHaveBeenCalledWith(expect.anything(), 'read-only')
     expect(workspace.attachSession).toHaveBeenCalledWith(sessionId)
-    expect(reply).toHaveBeenCalledWith('om_1', expect.stringMatching(/^answer /) as string)
+    expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: expect.stringMatching(/^answer /) as string })
   })
 
   it('reuses the live session across turns of one chat', async () => {
@@ -229,7 +232,7 @@ describe('ConversationRouter', () => {
       throw new Error('turn exploded')
     })
     router(ctx, settings()).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' }) })
   })
 
   it('rolls the creation transaction back when workspace attachment fails', async () => {
@@ -237,7 +240,7 @@ describe('ConversationRouter', () => {
     const sessionId = sessionIdForChat('oc_1')
     workspace.attachSession.mockRejectedValueOnce(new Error('attach failed'))
     router(ctx, settings()).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' }) })
     expect(disposes.get(sessionId)).toHaveBeenCalledOnce()
     expect(servedHandles.has(sessionId)).toBe(false)
   })
@@ -269,9 +272,33 @@ describe('ConversationRouter', () => {
     const live = { ...settings(), replyCharLimit: 500 }
     router(ctx, live).accept(message())
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    const text = reply.mock.calls[0]?.[1] as string
+    const content = reply.mock.calls[0]?.[1]
+    expect(content?.kind).toBe('text')
+    const text = content?.kind === 'text' ? content.text : ''
     expect(text.length).toBe(500)
     expect(text.endsWith('…')).toBe(true)
+  })
+
+  it('renders card-form replies under the configured title and limit', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'x'.repeat(600) }] } },
+      } as SessionEvent)
+    })
+    const live: FeishuSettings = { ...settings(), replyForm: 'card', cardTitle: 'Ops', replyCharLimit: 500 }
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    const content = reply.mock.calls[0]?.[1]
+    expect(content?.kind).toBe('card')
+    if (content?.kind !== 'card') return
+    expect(content.card.header.title.content).toBe('Ops')
+    expect(content.card.elements[0]?.content.length).toBe(500)
+    expect(content.card.elements[0]?.content.endsWith('…')).toBe(true)
   })
 
   it('serializes messages of one chat behind the active turn', async () => {

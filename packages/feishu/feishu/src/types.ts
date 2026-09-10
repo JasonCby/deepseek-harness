@@ -3,6 +3,9 @@
 /** Chat channel the bot listens on, selected at edge start. */
 export type FeishuTransport = 'websocket' | 'webhook'
 
+/** Reply form one settled turn takes: plain text or a single markdown card. */
+export type ReplyForm = 'text' | 'card'
+
 /**
  * One inbound chat message normalized from the Lark SDK dispatcher payload.
  * Both transports deliver the same flattened event shape, so the core consumes
