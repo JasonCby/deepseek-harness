@@ -32,14 +32,20 @@ function settings(): FeishuSettings {
   }
 }
 
+/** One `im.v1.message.reply` call the fake API client records. */
+type ReplyCall = {
+  path: { message_id: string }
+  data: { msg_type: 'text' | 'interactive'; content: string }
+}
+
 /** Everything the fake SDK recorded. */
 interface SdkTrace {
   sdk: LarkSdk
   wsClients: { start: Mock; close: Mock }[]
-  apiClients: { reply: Mock }[]
+  apiClients: { reply: Mock<(params: ReplyCall) => Promise<{ code: number }>> }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
-  router: { accept: Mock; setReplySender: Mock }
+  router: { accept: Mock<(message: InboundMessage) => void>; setReplySender: Mock<(sender: ReplySender) => void> }
 }
 
 /** Build the fake SDK binding plus its trace. */
@@ -58,10 +64,7 @@ function fakeSdk(): SdkTrace {
     },
     sdk: {
       createApiClient: () => {
-        const reply = vi.fn(async (_params: {
-          path: { message_id: string }
-          data: { msg_type: 'text' | 'interactive'; content: string }
-        }) => ({ code: 0 }))
+        const reply = vi.fn(async (_params: ReplyCall) => ({ code: 0 }))
         apiClients.push({ reply })
         return { im: { v1: { message: { reply } } } }
       },

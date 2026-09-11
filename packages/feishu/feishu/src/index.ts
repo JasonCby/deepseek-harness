@@ -22,7 +22,7 @@ import { EdgeController } from './edges.ts'
 import type { WebServerRouteRegistrar } from './edges.ts'
 import { larkSdk } from './lark.ts'
 
-export type { InboundMessage, FeishuTransport, ReplyForm } from './types.ts'
+export type { InboundMessage, FeishuTransport, ReplyForm, ResolvedReplyForm } from './types.ts'
 export {
   Config,
   SettingsConfig,
@@ -47,7 +47,7 @@ export { renderMarkdownCard } from './card.ts'
 export type { FeishuCard } from './card.ts'
 export { createReplySender, truncateReply } from './reply.ts'
 export type { ReplySender, ReplyContent } from './reply.ts'
-export { extractReplyText } from './settlement.ts'
+export { extractReplyText, resolveReplyForm } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
 /** Cordis function-plugin name. */

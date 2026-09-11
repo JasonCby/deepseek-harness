@@ -34,7 +34,7 @@ English | [中文](README.zh.md)
 | `path` / `maxBodyBytes` | Webhook route path (default `/feishu`) and body ceiling (default 65536). |
 | `allowChatIds` | Chats the bot answers; empty (default) answers every chat that reaches it. |
 | `groupRequireMention` | In groups, answer only mentioned messages (default `true`). |
-| `replyForm` / `cardTitle` | Reply form: `text` (default) or `card` (one markdown card); `cardTitle` is the card header title (default `DSH`). |
+| `replyForm` / `cardTitle` | Reply form: `auto` (default; turns carrying workflow runs or approval asks reply as one markdown card, the rest as text), `text`, or `card` (always one markdown card); `cardTitle` is the card header title (default `DSH`). |
 | `replyCharLimit` / `failureNotice` | Reply truncation bound (default 4000, shared by both forms) and the failure reply text. |
 | `dedupCapacity` | Remembered message identities for retry deduplication (default 1024). |
 | `workspacePath` / `agentPreset` / `permissionPreset` | Deployment-only: the sessions' workspace, agent composition, and sandbox/approval preset. Never editable through settings. |
@@ -51,7 +51,7 @@ All fields except the last row form the `feishu` settings namespace (`installSec
 ## Service API
 
 - `sessionIdForChat(chatId)` — deterministic `feishu-<sha256(chatId)>` Session id; a restart resumes the persisted session under the same id with no side-car mapping.
-- `ConversationRouter` — dedup by message id, per-chat queueing, session create/resume, turn settlement from the session log.
+- `ConversationRouter` — dedup by message id, per-chat queueing, session create/resume (a live agent another channel published for the chat's session, e.g. the Web UI, is adopted instead of resumed), turn settlement from the session log.
 - `EdgeController` — serialized edge lifecycle; `reconfigure()` stops the active edge and starts the one the current settings select.
 - `larkSdk` — the narrow SDK surface (`createApiClient`, `createWsClient`, `createDispatcher`, `generateChallenge`), injectable in tests.
 - `renderMarkdownCard` — the pure settled-text → card-JSON-1.0 projection (fixed blue header carrying `cardTitle`, one markdown element) the `card` reply form sends.
@@ -91,6 +91,6 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md). Card replies are recorded in [their own note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.md).
+The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md). Card replies are recorded in [their own note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.md); automatic per-turn form routing in [the auto-form note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.md); cross-channel live-agent adoption in [the adoption note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.md).
 
 </details>

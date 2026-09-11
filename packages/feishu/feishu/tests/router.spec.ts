@@ -202,6 +202,20 @@ describe('ConversationRouter', () => {
     expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(2)
   })
 
+  it('adopts a live agent another channel published instead of colliding on resume', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    servedHandles.set(sessionId, buildHandle(sessionId))
+    const create = (ctx.get('agents') as unknown as { create: ReturnType<typeof vi.fn> }).create
+    const resume = (ctx.get('agents') as unknown as { resume: ReturnType<typeof vi.fn> }).resume
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(create).not.toHaveBeenCalled()
+    expect(resume).not.toHaveBeenCalled()
+    expect(followups.get(sessionId)).toHaveBeenCalledOnce()
+    expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: expect.stringMatching(/^answer /) as string })
+  })
+
   it('drops retry deliveries of one message identity', async () => {
     const ctx = stubbedContext()
     const subject = router(ctx, settings())
@@ -299,6 +313,47 @@ describe('ConversationRouter', () => {
     expect(content.card.header.title.content).toBe('Ops')
     expect(content.card.elements[0]?.content.length).toBe(500)
     expect(content.card.elements[0]?.content.endsWith('…')).toBe(true)
+  })
+
+  it('auto settles workflow turns as cards and plain turns as text', async () => {
+    const workflowCtx = stubbedContext()
+    const workflowSession = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(workflowSession, async (events) => {
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: {} } as SessionEvent)
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow summary' }] } },
+      } as SessionEvent)
+    })
+    router(workflowCtx, { ...settings(), replyForm: 'auto' }).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply.mock.calls[0]?.[1]?.kind).toBe('card')
+
+    const plainCtx = stubbedContext()
+    whenIdleBehaviors.set(sessionIdForChat('oc_1'), async (events) => {
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'plain answer' }] } },
+      } as SessionEvent)
+    })
+    router(plainCtx, { ...settings(), replyForm: 'auto' }).accept(message({ messageId: 'om_2' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    expect(reply.mock.calls[1]?.[1]?.kind).toBe('text')
+  })
+
+  it('auto failure notices stay text even when the turn ran a workflow', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: {} } as SessionEvent)
+    })
+    router(ctx, { ...settings(), replyForm: 'auto' }).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' })
   })
 
   it('serializes messages of one chat behind the active turn', async () => {

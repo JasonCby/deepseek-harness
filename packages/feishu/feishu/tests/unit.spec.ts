@@ -7,7 +7,7 @@ import { assertConfig, assertSettings, type FeishuSettings } from '../src/config
 import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
-import { extractReplyText } from '../src/settlement.ts'
+import { extractReplyText, resolveReplyForm } from '../src/settlement.ts'
 import { sessionIdForChat } from '../src/conversation.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
@@ -117,6 +117,29 @@ describe('renderMarkdownCard', () => {
       header: { template: 'blue', title: { tag: 'plain_text', content: 'Ops' } },
       elements: [{ tag: 'markdown', content: 'done' }],
     })
+  })
+})
+
+describe('resolveReplyForm', () => {
+  /** Build one session event of the given type. */
+  function event(seq: number, type: string): SessionEvent {
+    return { type, seq, time: 0, data: {} } as SessionEvent
+  }
+
+  it('passes the explicit text and card settings through unchanged', () => {
+    expect(resolveReplyForm('text', [event(0, 'tool-workflow/run-start')], 0)).toBe('text')
+    expect(resolveReplyForm('card', [], 0)).toBe('card')
+  })
+
+  it('auto settles workflow and approval turns as cards', () => {
+    expect(resolveReplyForm('auto', [event(0, 'assistant/message'), event(1, 'tool-workflow/run-start')], 0)).toBe('card')
+    expect(resolveReplyForm('auto', [event(0, 'approval/asked')], 0)).toBe('card')
+  })
+
+  it('auto keeps unstructured turns as text and ignores the pre-turn window', () => {
+    expect(resolveReplyForm('auto', [event(0, 'assistant/message'), event(1, 'tool/result')], 0)).toBe('text')
+    expect(resolveReplyForm('auto', [event(0, 'tool-workflow/run-end')], 1)).toBe('text')
+    expect(resolveReplyForm('auto', [], 0)).toBe('text')
   })
 })
 

@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -15,10 +15,10 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import { renderMarkdownCard } from './card.ts'
 import { frameChatPrompt } from './prompt.ts'
 import type { ReplyContent, ReplySender } from './reply.ts'
-import { extractReplyText } from './settlement.ts'
+import { extractReplyText, resolveReplyForm } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
-import type { InboundMessage } from './types.ts'
+import type { InboundMessage, ResolvedReplyForm } from './types.ts'
 import { MessageDedup } from './dedup.ts'
 
 /**
@@ -50,7 +50,8 @@ export interface ConversationOptions {
  * text the session log recorded.
  */
 export class ConversationRouter {
-  private readonly handles = new Map<string, AgentHandle>()
+  /** Live agents per chat; an adopted agent carries no dispose capability. */
+  private readonly handles = new Map<string, { readonly agent: Agent }>()
   private readonly queues = new Map<string, Promise<void>>()
   private readonly dedup: MessageDedup
   private workspace: Promise<Workspace> | undefined
@@ -105,15 +106,21 @@ export class ConversationRouter {
   }
 
   /**
-   * Resolve the configured reply form onto one settled text.
+   * Resolve one settled payload's reply content under its concrete form.
    * @param text - the settled reply text or failure notice, already truncated.
+   * @param form - the concrete reply form the turn resolved to.
    * @param settings - the currently authoritative settings section.
    * @returns the payload the active transport delivers.
    */
-  private payload(text: string, settings: FeishuSettings): ReplyContent {
-    return settings.replyForm === 'card'
+  private payload(text: string, form: ResolvedReplyForm, settings: FeishuSettings): ReplyContent {
+    return form === 'card'
       ? { kind: 'card', card: renderMarkdownCard(text, settings.cardTitle) }
       : { kind: 'text', text }
+  }
+
+  /** Form one failure notice takes: only an explicit `card` setting sends notices as cards. */
+  private failureForm(settings: FeishuSettings): ResolvedReplyForm {
+    return settings.replyForm === 'card' ? 'card' : 'text'
   }
 
   /** Process one admitted message end-to-end; never rejects. */
@@ -136,14 +143,16 @@ export class ConversationRouter {
       }))
       await handle.agent.whenIdle()
       const replyText = extractReplyText(handle.agent.session.events, fromSeq)
-      const settled = replyText === undefined
-        ? settings.failureNotice
-        : truncateReply(replyText, settings.replyCharLimit)
-      await this.reply(message.messageId, this.payload(settled, settings))
+      const failed = replyText === undefined
+      const settled = failed ? settings.failureNotice : truncateReply(replyText, settings.replyCharLimit)
+      const form = failed
+        ? this.failureForm(settings)
+        : resolveReplyForm(settings.replyForm, handle.agent.session.events, fromSeq)
+      await this.reply(message.messageId, this.payload(settled, form, settings))
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
       try {
-        await this.reply(message.messageId, this.payload(settings.failureNotice, settings))
+        await this.reply(message.messageId, this.payload(settings.failureNotice, this.failureForm(settings), settings))
       } catch (noticeError: unknown) {
         // The failure notice shares the credentials and client of the failed
         // turn; a second refusal carries no additional signal.
@@ -152,12 +161,25 @@ export class ConversationRouter {
     }
   }
 
-  /** Resolve the live agent of one chat, creating or resuming it once. */
-  private async ensureAgent(chatId: string): Promise<AgentHandle> {
+  /**
+   * Resolve the live agent of one chat, creating or resuming it once. A live
+   * agent another channel published for the chat's session (the Web UI opened
+   * it) owns the identity — resuming the same id would collide — so it is
+   * adopted as-is; its owning channel keeps teardown.
+   * @param chatId - Feishu chat identity.
+   * @returns the live agent view the turn runs on.
+   */
+  private async ensureAgent(chatId: string): Promise<{ readonly agent: Agent }> {
     const cached = this.handles.get(chatId)
     if (cached !== undefined && this.ctx.agents.get(cached.agent.session.id) !== undefined) return cached
     this.handles.delete(chatId)
     const sessionId = sessionIdForChat(chatId)
+    const live = this.ctx.agents.get(sessionId)
+    if (live !== undefined) {
+      const adopted = { agent: live }
+      this.handles.set(chatId, adopted)
+      return adopted
+    }
     const persisted = (await this.ctx.sessionPersistence.list())
       .some(header => header.id === sessionId)
     const handle = persisted

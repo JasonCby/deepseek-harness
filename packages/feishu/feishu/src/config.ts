@@ -80,7 +80,7 @@ const settingsFields = {
   allowChatIds: z.array(z.string()).default([]),
   groupRequireMention: z.boolean().default(true),
   replyCharLimit: z.number().step(1).min(200).default(4000),
-  replyForm: z.union(['text', 'card'] as const).default('text'),
+  replyForm: z.union(['text', 'card', 'auto'] as const).default('auto'),
   cardTitle: z.string().default('DSH'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
