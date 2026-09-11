@@ -7,6 +7,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
 import { createReplySender, type ReplySender } from './reply.ts'
+import { createReactionSender, type ReactionSender } from './reaction.ts'
 import type { ConversationRouter } from './conversation.ts'
 import type { FeishuSettings } from './config.ts'
 
@@ -15,11 +16,13 @@ const MESSAGE_EVENT_TYPE = 'im.message.receive_v1'
 /** Sentinel a registered handler returns so a verified delivery is distinguishable from a rejected one. */
 const HANDLER_OK = 'ok'
 
-/** One running transport edge: teardown plus the reply sender its credentials serve. */
+/** One running transport edge: teardown plus the senders its credentials serve. */
 export interface TransportEdge {
   stop(): void
   /** Replies sent through this edge's app credentials. */
   reply: ReplySender
+  /** Thinking-indicator reactions sent through the same credentials. */
+  reactions: ReactionSender
 }
 
 /** The WebServer slice the webhook edge registers its route on. */
@@ -100,15 +103,17 @@ export function startWebsocketEdge(
   void client.start({ eventDispatcher: dispatcher }).catch((error: unknown) => {
     ctx.logger.error(`feishu: long connection failed: ${error instanceof Error ? error.message : String(error)}`)
   })
+  const api = sdk.createApiClient({
+    appId: credentials.appId,
+    appSecret: credentials.appSecret,
+    domain: settings.domain,
+  })
   return {
     stop: () => {
       client.close()
     },
-    reply: createReplySender(sdk.createApiClient({
-      appId: credentials.appId,
-      appSecret: credentials.appSecret,
-      domain: settings.domain,
-    })),
+    reply: createReplySender(api),
+    reactions: createReactionSender(api),
   }
 }
 
@@ -250,13 +255,15 @@ export async function startWebhookEdge(
     },
   }
   const unregister = webServer.register(route)
+  const api = sdk.createApiClient({
+    appId: credentials.appId,
+    appSecret: credentials.appSecret,
+    domain: settings.domain,
+  })
   return {
     stop: unregister,
-    reply: createReplySender(sdk.createApiClient({
-      appId: credentials.appId,
-      appSecret: credentials.appSecret,
-      domain: settings.domain,
-    })),
+    reply: createReplySender(api),
+    reactions: createReactionSender(api),
   }
 }
 
@@ -324,5 +331,6 @@ export class EdgeController {
   private activate(edge: TransportEdge): void {
     this.current = edge
     this.router.setReplySender(edge.reply)
+    this.router.setReactionSender(edge.reactions)
   }
 }

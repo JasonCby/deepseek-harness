@@ -50,6 +50,8 @@ export interface FeishuSettings {
   readonly replyForm: ReplyForm
   /** Card header title when {@link FeishuSettings.replyForm} is `card`. */
   readonly cardTitle: string
+  /** Emoji key bracketing admitted turns as the thinking indicator; empty disables the indicator. */
+  readonly thinkingEmoji: string
   /** Text replied when message processing fails before a reply exists. */
   readonly failureNotice: string
   /** Maximum remembered message identities for retry deduplication. */
@@ -82,6 +84,7 @@ const settingsFields = {
   replyCharLimit: z.number().step(1).min(200).default(4000),
   replyForm: z.union(['text', 'card', 'auto'] as const).default('auto'),
   cardTitle: z.string().default('DSH'),
+  thinkingEmoji: z.string().default('Typing'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
 }
@@ -115,6 +118,7 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     replyCharLimit: config.replyCharLimit,
     replyForm: config.replyForm,
     cardTitle: config.cardTitle,
+    thinkingEmoji: config.thinkingEmoji,
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
   }
@@ -140,6 +144,9 @@ export function assertSettings(value: FeishuSettings): void {
   }
   if (value.cardTitle.trim() === '') {
     throw new Error('feishu cardTitle must be non-empty')
+  }
+  if (value.thinkingEmoji.trim() !== value.thinkingEmoji) {
+    throw new Error('feishu thinkingEmoji must be a trimmed emoji key; use an empty string to disable the thinking indicator')
   }
   if (value.allowChatIds.some(id => id.trim() !== id || id === '')) {
     throw new Error('feishu allowChatIds entries must be non-empty trimmed strings')

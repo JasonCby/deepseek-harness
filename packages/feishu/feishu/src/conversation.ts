@@ -15,6 +15,7 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import { renderMarkdownCard } from './card.ts'
 import { frameChatPrompt } from './prompt.ts'
 import type { ReplyContent, ReplySender } from './reply.ts'
+import type { ReactionSender } from './reaction.ts'
 import { extractReplyText, resolveReplyForm } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
@@ -43,6 +44,12 @@ export interface ConversationOptions {
   readonly permissionPreset: string
 }
 
+/** Between edges no API client exists; an absent indicator must not fail a turn. */
+const silentReactions: ReactionSender = {
+  add: () => Promise.resolve(undefined),
+  remove: () => Promise.resolve(),
+}
+
 /**
  * One conversation per chat: deduplicates transport retries, serializes
  * message processing per chat (session creation must complete before the next
@@ -50,12 +57,12 @@ export interface ConversationOptions {
  * text the session log recorded.
  */
 export class ConversationRouter {
-  /** Live agents per chat; an adopted agent carries no dispose capability. */
   private readonly handles = new Map<string, { readonly agent: Agent }>()
   private readonly queues = new Map<string, Promise<void>>()
   private readonly dedup: MessageDedup
   private workspace: Promise<Workspace> | undefined
   private reply: ReplySender
+  private reactions: ReactionSender = silentReactions
 
   /**
    * @param ctx - plugin context owning every chat agent.
@@ -98,6 +105,16 @@ export class ConversationRouter {
     this.reply = sender
   }
 
+  /**
+   * Point the thinking indicator at the active transport edge's sender. The
+   * controller calls this beside {@link ConversationRouter.setReplySender};
+   * between edges the silent placeholder applies.
+   * @param sender - the active edge's reaction sender.
+   */
+  setReactionSender(sender: ReactionSender): void {
+    this.reactions = sender
+  }
+
   /** Whether one chat message passes the live allowlist and mention gates. */
   private admitted(message: InboundMessage, settings: FeishuSettings): boolean {
     if (settings.allowChatIds.length > 0 && !settings.allowChatIds.includes(message.chatId)) return false
@@ -123,11 +140,38 @@ export class ConversationRouter {
     return settings.replyForm === 'card' ? 'card' : 'text'
   }
 
+  /**
+   * Add the configured thinking emoji to one admitted message, best-effort.
+   * @param messageId - the admitted message the indicator attaches to.
+   * @param settings - the currently authoritative settings section.
+   * @returns the reaction identity, or undefined when the indicator is off or failed.
+   */
+  private async markThinking(messageId: string, settings: FeishuSettings): Promise<string | undefined> {
+    if (settings.thinkingEmoji === '') return undefined
+    try {
+      return await this.reactions.add(messageId, settings.thinkingEmoji)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`feishu: thinking reaction for ${messageId} was not added: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+
+  /** Remove the thinking reaction one turn added, best-effort. */
+  private async clearThinking(messageId: string, reactionId: string | undefined): Promise<void> {
+    if (reactionId === undefined) return
+    try {
+      await this.reactions.remove(messageId, reactionId)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`feishu: thinking reaction for ${messageId} was not removed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   /** Process one admitted message end-to-end; never rejects. */
   private async process(message: InboundMessage): Promise<void> {
     const settings = this.settings()
     if (!this.admitted(message, settings)) return
     if (message.text === '') return
+    const reactionId = await this.markThinking(message.messageId, settings)
     try {
       const handle = await this.ensureAgent(message.chatId)
       const fromSeq = handle.agent.session.events.length
@@ -158,6 +202,8 @@ export class ConversationRouter {
         // turn; a second refusal carries no additional signal.
         this.ctx.logger.warn(`feishu: failure notice for ${message.messageId} was not delivered: ${noticeError instanceof Error ? noticeError.message : String(noticeError)}`)
       }
+    } finally {
+      await this.clearThinking(message.messageId, reactionId)
     }
   }
 

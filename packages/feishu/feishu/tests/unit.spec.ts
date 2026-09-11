@@ -7,6 +7,8 @@ import { assertConfig, assertSettings, type FeishuSettings } from '../src/config
 import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
+import { createReactionSender } from '../src/reaction.ts'
+import type { LarkApiClient } from '../src/lark.ts'
 import { extractReplyText, resolveReplyForm } from '../src/settlement.ts'
 import { sessionIdForChat } from '../src/conversation.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -143,6 +145,34 @@ describe('resolveReplyForm', () => {
   })
 })
 
+describe('createReactionSender', () => {
+  /** Build one fake API client with per-call response codes. */
+  function client(codes: { create?: number; remove?: number }): LarkApiClient {
+    return {
+      im: {
+        v1: {
+          message: { reply: async () => ({ code: 0 }) },
+          messageReaction: {
+            create: async () => ({ code: codes.create ?? 0, ...(codes.create ?? 0) === 0 ? { data: { reaction_id: 're_9' } } : { msg: 'refused' } }),
+            delete: async () => ({ code: codes.remove ?? 0, ...(codes.remove ?? 0) === 0 ? {} : { msg: 'refused' } }),
+          },
+        },
+      },
+    }
+  }
+
+  it('returns the reaction identity and removes it by identity', async () => {
+    const sender = createReactionSender(client({}))
+    await expect(sender.add('om_1', 'Typing')).resolves.toBe('re_9')
+    await expect(sender.remove('om_1', 're_9')).resolves.toBeUndefined()
+  })
+
+  it('throws on Feishu refusals', async () => {
+    await expect(createReactionSender(client({ create: 230001 })).add('om_1', 'Typing')).rejects.toThrow(/230001/)
+    await expect(createReactionSender(client({ remove: 230002 })).remove('om_1', 're_9')).rejects.toThrow(/230002/)
+  })
+})
+
 describe('truncateReply', () => {
   it('keeps short text and truncates long text', () => {
     expect(truncateReply('short', 10)).toBe('short')
@@ -200,6 +230,7 @@ describe('settings validation', () => {
       replyCharLimit: 4000,
       replyForm: 'text',
       cardTitle: 'DSH',
+      thinkingEmoji: 'Typing',
       failureNotice: 'failed',
       dedupCapacity: 1024,
     }
@@ -235,6 +266,9 @@ describe('settings validation', () => {
     expect(() => {
       assertSettings({ ...base(), cardTitle: ' ' })
     }).toThrow(/cardTitle/)
+    expect(() => {
+      assertSettings({ ...base(), thinkingEmoji: ' Typing' })
+    }).toThrow(/thinkingEmoji/)
   })
 
   it('rejects an empty workspace path in the composition config', () => {

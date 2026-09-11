@@ -25,6 +25,7 @@ function settings(): FeishuSettings {
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
+    thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
   }
@@ -214,6 +215,52 @@ describe('ConversationRouter', () => {
     expect(resume).not.toHaveBeenCalled()
     expect(followups.get(sessionId)).toHaveBeenCalledOnce()
     expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: expect.stringMatching(/^answer /) as string })
+  })
+
+  it('brackets one turn with the thinking reaction', async () => {
+    const ctx = stubbedContext()
+    const added: { messageId: string; emoji: string }[] = []
+    const removed: { messageId: string; reactionId: string }[] = []
+    const subject = router(ctx, settings())
+    subject.setReactionSender({
+      add: async (messageId, emoji) => {
+        added.push({ messageId, emoji })
+        return 're_1'
+      },
+      remove: async (messageId, reactionId) => {
+        removed.push({ messageId, reactionId })
+      },
+    })
+    subject.accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(added).toEqual([{ messageId: 'om_1', emoji: 'Typing' }])
+    expect(removed).toEqual([{ messageId: 'om_1', reactionId: 're_1' }])
+  })
+
+  it('skips the thinking reaction when disabled and survives its failure', async () => {
+    const disabledCtx = stubbedContext()
+    let adds = 0
+    const disabled = router(disabledCtx, { ...settings(), thinkingEmoji: '' })
+    disabled.setReactionSender({
+      add: async () => {
+        adds += 1
+        return 're_1'
+      },
+      remove: async () => {},
+    })
+    disabled.accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(adds).toBe(0)
+
+    const failingCtx = stubbedContext()
+    const failing = router(failingCtx, settings())
+    failing.setReactionSender({
+      add: async () => { throw new Error('reaction refused') },
+      remove: async () => {},
+    })
+    failing.accept(message({ messageId: 'om_2' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    expect(reply.mock.calls[1]?.[1]?.kind).toBe('text')
   })
 
   it('drops retry deliveries of one message identity', async () => {

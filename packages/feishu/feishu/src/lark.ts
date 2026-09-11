@@ -23,9 +23,35 @@ export interface LarkMessageResource {
   }): Promise<LarkResponse>
 }
 
+/** The `im.v1.messageReaction` resource of a Lark API client. */
+export interface LarkMessageReactionResource {
+  /**
+   * Add one emoji reaction to a message.
+   * @param params - path message identity plus the reaction's emoji key.
+   * @returns the Feishu API response envelope carrying the reaction identity.
+   */
+  create(params: {
+    path: { message_id: string }
+    data: { reaction_type: { emoji_type: string } }
+  }): Promise<LarkResponse & { readonly data?: { readonly reaction_id?: string | undefined } | undefined }>
+  /**
+   * Remove one reaction this app added.
+   * @param params - path message and reaction identities.
+   * @returns the Feishu API response envelope.
+   */
+  delete(params: {
+    path: { message_id: string; reaction_id: string }
+  }): Promise<LarkResponse>
+}
+
 /** The slice of a Lark API client this package uses. */
 export interface LarkApiClient {
-  readonly im: { readonly v1: { readonly message: LarkMessageResource } }
+  readonly im: {
+    readonly v1: {
+      readonly message: LarkMessageResource
+      readonly messageReaction: LarkMessageReactionResource
+    }
+  }
 }
 
 /** Lark SDK `EventDispatcher`: registered handlers receive flattened event payloads. */

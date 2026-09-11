@@ -8,6 +8,7 @@ import type { LarkSdk } from '../src/lark.ts'
 import { ConversationRouter } from '../src/conversation.ts'
 import { renderMarkdownCard } from '../src/card.ts'
 import type { ReplySender } from '../src/reply.ts'
+import type { ReactionSender } from '../src/reaction.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { InboundMessage } from '../src/types.ts'
 
@@ -27,6 +28,7 @@ function settings(): FeishuSettings {
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
+    thinkingEmoji: 'Typing',
     failureNotice: 'failed',
     dedupCapacity: 64,
   }
@@ -38,14 +40,28 @@ type ReplyCall = {
   data: { msg_type: 'text' | 'interactive'; content: string }
 }
 
+/** One `im.v1.messageReaction.create` call the fake API client records. */
+type ReactionCreateCall = {
+  path: { message_id: string }
+  data: { reaction_type: { emoji_type: string } }
+}
+
 /** Everything the fake SDK recorded. */
 interface SdkTrace {
   sdk: LarkSdk
   wsClients: { start: Mock; close: Mock }[]
-  apiClients: { reply: Mock<(params: ReplyCall) => Promise<{ code: number }>> }[]
+  apiClients: {
+    reply: Mock<(params: ReplyCall) => Promise<{ code: number }>>
+    reactionCreate: Mock<(params: ReactionCreateCall) => Promise<{ code: number; data?: { reaction_id?: string } }>>
+    reactionDelete: Mock<(params: { path: { message_id: string; reaction_id: string } }) => Promise<{ code: number }>>
+  }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
-  router: { accept: Mock<(message: InboundMessage) => void>; setReplySender: Mock<(sender: ReplySender) => void> }
+  router: {
+    accept: Mock<(message: InboundMessage) => void>
+    setReplySender: Mock<(sender: ReplySender) => void>
+    setReactionSender: Mock<(sender: ReactionSender) => void>
+  }
 }
 
 /** Build the fake SDK binding plus its trace. */
@@ -61,12 +77,15 @@ function fakeSdk(): SdkTrace {
     router: {
       accept: vi.fn((_message: InboundMessage) => {}),
       setReplySender: vi.fn((_sender: ReplySender) => {}),
+      setReactionSender: vi.fn((_sender: ReactionSender) => {}),
     },
     sdk: {
       createApiClient: () => {
         const reply = vi.fn(async (_params: ReplyCall) => ({ code: 0 }))
-        apiClients.push({ reply })
-        return { im: { v1: { message: { reply } } } }
+        const reactionCreate = vi.fn(async (_params: ReactionCreateCall) => ({ code: 0, data: { reaction_id: 're_1' } }))
+        const reactionDelete = vi.fn(async (_params: { path: { message_id: string; reaction_id: string } }) => ({ code: 0 }))
+        apiClients.push({ reply, reactionCreate, reactionDelete })
+        return { im: { v1: { message: { reply }, messageReaction: { create: reactionCreate, delete: reactionDelete } } } }
       },
       createWsClient: () => {
         const client = {
@@ -145,6 +164,7 @@ describe('EdgeController', () => {
     controller.reconfigure()
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setReactionSender).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
     controller.dispose()

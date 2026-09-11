@@ -35,6 +35,7 @@ kind: "package-reference"
 | `allowChatIds` | 机器人应答的会话；为空（默认）时应答到达机器人的每个会话。 |
 | `groupRequireMention` | 群聊中仅应答被提及的消息（默认 `true`）。 |
 | `replyForm` / `cardTitle` | 回复形式：`auto`（默认；携带工作流或审批的轮次回单张 markdown 卡片，其余回文本）、`text`、或 `card`（始终单张 markdown 卡片）；`cardTitle` 为卡片头标题（默认 `DSH`）。 |
+| `thinkingEmoji` | 作为思考指示器括起每条获准消息的表情 key（默认 `Typing`）；留空禁用指示器。 |
 | `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000，两种形式共用）与失败回复文案。 |
 | `dedupCapacity` | 重试去重所记住的消息标识数（默认 1024）。 |
 | `workspacePath` / `agentPreset` / `permissionPreset` | 仅部署层：会话的工作区、agent 组合与沙箱/审批预设。绝不可经设置修改。 |
@@ -51,7 +52,7 @@ kind: "package-reference"
 ## 服务 API
 
 - `sessionIdForChat(chatId)` — 确定性的 `feishu-<sha256(chatId)>` Session id；重启后以同一 id 恢复持久化会话，无需旁路映射存储。
-- `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复（其他通道为会话发布的存活 agent——如 Web UI——直接收养而非重复恢复）、从会话日志结算轮次。
+- `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复（其他通道为会话发布的存活 agent——如 Web UI——直接收养而非重复恢复）、从会话日志结算轮次，并以尽力而为的思考表情括起每条获准消息。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
 - `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。
@@ -92,6 +93,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)。
 
 </details>

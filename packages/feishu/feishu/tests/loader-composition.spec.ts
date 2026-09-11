@@ -32,6 +32,9 @@ async function compose(): Promise<void> {
     "- name: '@deepseek-ai/dsh-feishu'",
     '  config:',
     '    transport: webhook',
+    // The thinking indicator would place a real reaction API call with these
+    // fixture credentials; disable it so the composition stays hermetic.
+    "    thinkingEmoji: ''",
     '    workspacePath: /tmp/dsh-feishu-loader-workspace',
     '    agentPreset: standard',
     '    permissionPreset: read-only',
