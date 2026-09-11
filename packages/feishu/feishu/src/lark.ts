@@ -13,14 +13,16 @@ export interface LarkResponse {
 /** The `im.v1.message` resource of a Lark API client. */
 export interface LarkMessageResource {
   /**
-   * Reply to one message.
+   * Reply to one message, optionally opening a topic thread on it.
    * @param params - path message identity plus text content.
-   * @returns the Feishu API response envelope.
+   * @returns the Feishu API response envelope carrying the reply's identity and topic.
    */
   reply(params: {
     path: { message_id: string }
-    data: { msg_type: 'text' | 'interactive'; content: string }
-  }): Promise<LarkResponse>
+    data: { msg_type: 'text' | 'interactive'; content: string; reply_in_thread?: boolean }
+  }): Promise<LarkResponse & {
+    readonly data?: { readonly message_id?: string | undefined; readonly thread_id?: string | undefined } | undefined
+  }>
 }
 
 /** The `im.v1.messageReaction` resource of a Lark API client. */

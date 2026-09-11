@@ -8,6 +8,7 @@ import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
 import { createReplySender, type ReplySender } from './reply.ts'
 import { createReactionSender, type ReactionSender } from './reaction.ts'
+import { createTopicOpener, type TopicOpener } from './topic.ts'
 import type { ConversationRouter } from './conversation.ts'
 import type { FeishuSettings } from './config.ts'
 
@@ -23,6 +24,8 @@ export interface TransportEdge {
   reply: ReplySender
   /** Thinking-indicator reactions sent through the same credentials. */
   reactions: ReactionSender
+  /** Topic opening sent through the same credentials. */
+  topics: TopicOpener
 }
 
 /** The WebServer slice the webhook edge registers its route on. */
@@ -114,6 +117,7 @@ export function startWebsocketEdge(
     },
     reply: createReplySender(api),
     reactions: createReactionSender(api),
+    topics: createTopicOpener(api),
   }
 }
 
@@ -264,6 +268,7 @@ export async function startWebhookEdge(
     stop: unregister,
     reply: createReplySender(api),
     reactions: createReactionSender(api),
+    topics: createTopicOpener(api),
   }
 }
 
@@ -332,5 +337,6 @@ export class EdgeController {
     this.current = edge
     this.router.setReplySender(edge.reply)
     this.router.setReactionSender(edge.reactions)
+    this.router.setTopicOpener(edge.topics)
   }
 }

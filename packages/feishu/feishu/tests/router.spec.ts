@@ -4,7 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { ConversationRouter, sessionIdForChat } from '../src/conversation.ts'
+import { ConversationRouter, sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { ReplyContent } from '../src/reply.ts'
 import type { InboundMessage } from '../src/types.ts'
@@ -22,6 +22,7 @@ function settings(): FeishuSettings {
     maxBodyBytes: 65536,
     allowChatIds: [],
     groupRequireMention: true,
+    replyInThread: false,
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
@@ -201,6 +202,70 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
     expect(create).toHaveBeenCalledOnce()
     expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(2)
+  })
+
+  it('routes topic messages to their own session beside the chat main stream', async () => {
+    const ctx = stubbedContext()
+    const create = (ctx.get('agents') as unknown as { create: ReturnType<typeof vi.fn> }).create
+    const title = (ctx.get('sessionTitle') as unknown as { rename: ReturnType<typeof vi.fn> }).rename
+    const subject = router(ctx, settings())
+    subject.accept(message({ messageId: 'om_main' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    subject.accept(message({ messageId: 'om_t1', threadId: 'omt_1' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    subject.accept(message({ messageId: 'om_t1b', threadId: 'omt_1' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(3) })
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(1)
+    expect(followups.get(sessionIdForThread('oc_1', 'omt_1'))).toHaveBeenCalledTimes(2)
+    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
+    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1 topic omt_1')
+  })
+
+  it('opens one topic per main-stream message when replyInThread is on', async () => {
+    const ctx = stubbedContext()
+    const opened: { messageId: string; summary: string }[] = []
+    const subject = router(ctx, { ...settings(), replyInThread: true })
+    subject.setTopicOpener({
+      open: async (messageId, summary) => {
+        opened.push({ messageId, summary })
+        return { leadMessageId: 'om_lead', threadId: 'omt_new' }
+      },
+    })
+    subject.accept(message({ text: 'multi\nline   question' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(opened).toEqual([{ messageId: 'om_1', summary: 'multi line question' }])
+    expect(reply).toHaveBeenCalledWith('om_lead', expect.objectContaining({ kind: 'text' }))
+    expect(followups.get(sessionIdForThread('oc_1', 'omt_new'))).toHaveBeenCalledOnce()
+  })
+
+  it('continues an existing topic without opening another when replyInThread is on', async () => {
+    const ctx = stubbedContext()
+    let opens = 0
+    const subject = router(ctx, { ...settings(), replyInThread: true })
+    subject.setTopicOpener({
+      open: async () => {
+        opens += 1
+        return { leadMessageId: 'om_lead', threadId: 'omt_x' }
+      },
+    })
+    subject.accept(message({ messageId: 'om_t', threadId: 'omt_1' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(opens).toBe(0)
+    expect(reply).toHaveBeenCalledWith('om_t', expect.objectContaining({ kind: 'text' }))
+    expect(followups.get(sessionIdForThread('oc_1', 'omt_1'))).toHaveBeenCalledOnce()
+  })
+
+  it('degrades to an in-place reply when topic opening fails', async () => {
+    const ctx = stubbedContext()
+    const subject = router(ctx, { ...settings(), replyInThread: true })
+    subject.setTopicOpener({
+      open: async () => { throw new Error('topic refused') },
+    })
+    subject.accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply).toHaveBeenCalledWith('om_1', expect.objectContaining({ kind: 'text' }))
+    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledOnce()
   })
 
   it('adopts a live agent another channel published instead of colliding on resume', async () => {

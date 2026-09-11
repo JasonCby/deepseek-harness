@@ -8,9 +8,10 @@ import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
 import { createReactionSender } from '../src/reaction.ts'
+import { createTopicOpener, topicSummary } from '../src/topic.ts'
 import type { LarkApiClient } from '../src/lark.ts'
 import { extractReplyText, resolveReplyForm } from '../src/settlement.ts'
-import { sessionIdForChat } from '../src/conversation.ts'
+import { sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** One flattened `im.message.receive_v1` dispatcher payload. */
@@ -29,6 +30,14 @@ function messagePayload(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 describe('normalizeEventData', () => {
+  it('carries the topic identity when the event has one', () => {
+    const base = messagePayload()
+    const message = base.message as Record<string, unknown>
+    const withTopic = normalizeEventData({ ...base, message: { ...message, thread_id: 'omt_1' } })
+    expect(withTopic?.threadId).toBe('omt_1')
+    expect(normalizeEventData(base)?.threadId).toBeUndefined()
+  })
+
   it('normalizes one text message', () => {
     expect(normalizeEventData(messagePayload())).toEqual({
       messageId: 'om_1',
@@ -173,6 +182,48 @@ describe('createReactionSender', () => {
   })
 })
 
+describe('sessionIdForThread', () => {
+  it('is deterministic per topic, distinct from the main chat and other topics', () => {
+    expect(sessionIdForThread('oc_1', 'omt_1')).toBe(sessionIdForThread('oc_1', 'omt_1'))
+    expect(sessionIdForThread('oc_1', 'omt_1')).not.toBe(sessionIdForChat('oc_1'))
+    expect(sessionIdForThread('oc_1', 'omt_1')).not.toBe(sessionIdForThread('oc_1', 'omt_2'))
+    expect(sessionIdForThread('oc_1', 'omt_1')).not.toBe(sessionIdForThread('oc_2', 'omt_1'))
+    expect(sessionIdForThread('oc_1', 'omt_1').startsWith('feishu-')).toBe(true)
+  })
+})
+
+describe('topicSummary', () => {
+  it('single-lines and truncates to the summary bound', () => {
+    expect(topicSummary('  hello \n  world  ')).toBe('hello world')
+    expect(topicSummary('x'.repeat(100)).length).toBe(64)
+    expect(topicSummary('x'.repeat(100)).endsWith('…')).toBe(true)
+  })
+})
+
+describe('createTopicOpener', () => {
+  /** Build one fake API client whose reply returns the given envelope. */
+  function client(envelope: { code?: number; msg?: string; data?: { message_id?: string; thread_id?: string } }): LarkApiClient {
+    return {
+      im: {
+        v1: {
+          message: { reply: async () => envelope },
+          messageReaction: { create: async () => ({ code: 0 }), delete: async () => ({ code: 0 }) },
+        },
+      },
+    }
+  }
+
+  it('opens one topic and returns its identities', async () => {
+    const opener = createTopicOpener(client({ code: 0, data: { message_id: 'om_lead', thread_id: 'omt_1' } }))
+    await expect(opener.open('om_1', 'summary')).resolves.toEqual({ leadMessageId: 'om_lead', threadId: 'omt_1' })
+  })
+
+  it('throws on refusals and on responses without a thread identity', async () => {
+    await expect(createTopicOpener(client({ code: 230001, msg: 'refused' })).open('om_1', 's')).rejects.toThrow(/230001/)
+    await expect(createTopicOpener(client({ code: 0, data: { message_id: 'om_lead' } })).open('om_1', 's')).rejects.toThrow(/thread identity/)
+  })
+})
+
 describe('truncateReply', () => {
   it('keeps short text and truncates long text', () => {
     expect(truncateReply('short', 10)).toBe('short')
@@ -227,6 +278,7 @@ describe('settings validation', () => {
       maxBodyBytes: 65536,
       allowChatIds: [],
       groupRequireMention: true,
+      replyInThread: false,
       replyCharLimit: 4000,
       replyForm: 'text',
       cardTitle: 'DSH',

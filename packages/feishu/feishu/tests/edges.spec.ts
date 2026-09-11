@@ -9,6 +9,7 @@ import { ConversationRouter } from '../src/conversation.ts'
 import { renderMarkdownCard } from '../src/card.ts'
 import type { ReplySender } from '../src/reply.ts'
 import type { ReactionSender } from '../src/reaction.ts'
+import type { TopicOpener } from '../src/topic.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { InboundMessage } from '../src/types.ts'
 
@@ -25,6 +26,7 @@ function settings(): FeishuSettings {
     maxBodyBytes: 65536,
     allowChatIds: [],
     groupRequireMention: true,
+    replyInThread: false,
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
@@ -61,6 +63,7 @@ interface SdkTrace {
     accept: Mock<(message: InboundMessage) => void>
     setReplySender: Mock<(sender: ReplySender) => void>
     setReactionSender: Mock<(sender: ReactionSender) => void>
+    setTopicOpener: Mock<(opener: TopicOpener) => void>
   }
 }
 
@@ -78,6 +81,7 @@ function fakeSdk(): SdkTrace {
       accept: vi.fn((_message: InboundMessage) => {}),
       setReplySender: vi.fn((_sender: ReplySender) => {}),
       setReactionSender: vi.fn((_sender: ReactionSender) => {}),
+      setTopicOpener: vi.fn((_opener: TopicOpener) => {}),
     },
     sdk: {
       createApiClient: () => {
@@ -165,6 +169,7 @@ describe('EdgeController', () => {
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setReactionSender).toHaveBeenCalledOnce()
+    expect(trace.router.setTopicOpener).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
     controller.dispose()

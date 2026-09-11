@@ -44,6 +44,8 @@ export interface FeishuSettings {
   readonly allowChatIds: string[]
   /** In groups, answer only messages whose mention list is non-empty. */
   readonly groupRequireMention: boolean
+  /** Open one topic per main-stream message and answer inside it; topic messages always continue their topic. */
+  readonly replyInThread: boolean
   /** Reply texts longer than this are truncated with an ellipsis marker. */
   readonly replyCharLimit: number
   /** Form settled replies take: plain text or a single markdown card. */
@@ -81,6 +83,7 @@ const settingsFields = {
   maxBodyBytes: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(65536),
   allowChatIds: z.array(z.string()).default([]),
   groupRequireMention: z.boolean().default(true),
+  replyInThread: z.boolean().default(false),
   replyCharLimit: z.number().step(1).min(200).default(4000),
   replyForm: z.union(['text', 'card', 'auto'] as const).default('auto'),
   cardTitle: z.string().default('DSH'),
@@ -115,6 +118,7 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     maxBodyBytes: config.maxBodyBytes,
     allowChatIds: config.allowChatIds,
     groupRequireMention: config.groupRequireMention,
+    replyInThread: config.replyInThread,
     replyCharLimit: config.replyCharLimit,
     replyForm: config.replyForm,
     cardTitle: config.cardTitle,

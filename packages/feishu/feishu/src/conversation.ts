@@ -16,6 +16,8 @@ import { renderMarkdownCard } from './card.ts'
 import { frameChatPrompt } from './prompt.ts'
 import type { ReplyContent, ReplySender } from './reply.ts'
 import type { ReactionSender } from './reaction.ts'
+import type { OpenedTopic, TopicOpener } from './topic.ts'
+import { topicSummary } from './topic.ts'
 import { extractReplyText, resolveReplyForm } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
@@ -23,15 +25,38 @@ import type { InboundMessage, ResolvedReplyForm } from './types.ts'
 import { MessageDedup } from './dedup.ts'
 
 /**
- * Derive the deterministic session identity of one chat. A stable mapping
- * survives restarts with no side-car storage: the first message after a
- * restart resumes the persisted session under the same id.
+ * Derive the deterministic session identity of one conversation. A stable
+ * mapping survives restarts with no side-car storage: the first message after
+ * a restart resumes the persisted session under the same id.
+ * @param chatId - Feishu chat identity.
+ * @param threadId - topic thread identity, or undefined for the chat's main stream.
+ * @returns the branded session id for the conversation.
+ */
+function sessionKeyFor(chatId: string, threadId: string | undefined): SessionId {
+  // The composite separator cannot occur inside a chat id, so topic material
+  // never collides with any plain chat's derivation input.
+  const material = threadId === undefined ? chatId : `${chatId}\n${threadId}`
+  const digest = createHash('sha256').update(material).digest('hex').slice(0, 32)
+  return brandString<SessionId>(`feishu-${digest}`)
+}
+
+/**
+ * Derive the deterministic session identity of one chat's main stream.
  * @param chatId - Feishu chat identity.
  * @returns the branded session id for the chat.
  */
 export function sessionIdForChat(chatId: string): SessionId {
-  const digest = createHash('sha256').update(chatId).digest('hex').slice(0, 32)
-  return brandString<SessionId>(`feishu-${digest}`)
+  return sessionKeyFor(chatId, undefined)
+}
+
+/**
+ * Derive the deterministic session identity of one topic thread.
+ * @param chatId - Feishu chat the topic belongs to.
+ * @param threadId - topic thread identity (`omt_`-prefixed).
+ * @returns the branded session id for the topic.
+ */
+export function sessionIdForThread(chatId: string, threadId: string): SessionId {
+  return sessionKeyFor(chatId, threadId)
 }
 
 /** Conversation inputs fixed by the composition; settings fields stay live. */
@@ -50,19 +75,26 @@ const silentReactions: ReactionSender = {
   remove: () => Promise.resolve(),
 }
 
+/** Between edges no topic can open; the failure degrades the turn to an in-place reply. */
+const unreachableTopics: TopicOpener = {
+  open: () => Promise.reject(new Error('feishu: no transport edge is active')),
+}
+
 /**
- * One conversation per chat: deduplicates transport retries, serializes
- * message processing per chat (session creation must complete before the next
- * message is admitted), and settles each turn by replying with the assistant
- * text the session log recorded.
+ * One conversation per chat main stream or topic thread: deduplicates
+ * transport retries, serializes message processing per conversation (session
+ * creation must complete before the next message is admitted), and settles
+ * each turn by replying with the assistant text the session log recorded.
  */
 export class ConversationRouter {
-  private readonly handles = new Map<string, { readonly agent: Agent }>()
-  private readonly queues = new Map<string, Promise<void>>()
+  /** Live agents per conversation; an adopted agent carries no dispose capability. */
+  private readonly handles = new Map<SessionId, { readonly agent: Agent }>()
+  private readonly queues = new Map<SessionId, Promise<void>>()
   private readonly dedup: MessageDedup
   private workspace: Promise<Workspace> | undefined
   private reply: ReplySender
   private reactions: ReactionSender = silentReactions
+  private topics: TopicOpener = unreachableTopics
 
   /**
    * @param ctx - plugin context owning every chat agent.
@@ -88,11 +120,12 @@ export class ConversationRouter {
    */
   accept(message: InboundMessage): void {
     if (!this.dedup.claim(message.messageId)) return
-    const tail = this.queues.get(message.chatId) ?? Promise.resolve()
+    const key = sessionKeyFor(message.chatId, message.threadId)
+    const tail = this.queues.get(key) ?? Promise.resolve()
     const next = tail.then(() => this.process(message)).finally(() => {
-      if (this.queues.get(message.chatId) === next) this.queues.delete(message.chatId)
+      if (this.queues.get(key) === next) this.queues.delete(key)
     })
-    this.queues.set(message.chatId, next)
+    this.queues.set(key, next)
   }
 
   /**
@@ -113,6 +146,16 @@ export class ConversationRouter {
    */
   setReactionSender(sender: ReactionSender): void {
     this.reactions = sender
+  }
+
+  /**
+   * Point topic opening at the active transport edge's opener. The controller
+   * calls this beside {@link ConversationRouter.setReplySender}; between edges
+   * the unreachable placeholder degrades turns to in-place replies.
+   * @param opener - the active edge's topic opener.
+   */
+  setTopicOpener(opener: TopicOpener): void {
+    this.topics = opener
   }
 
   /** Whether one chat message passes the live allowlist and mention gates. */
@@ -166,17 +209,37 @@ export class ConversationRouter {
     }
   }
 
+  /**
+   * Open one topic for a main-stream message under the `replyInThread`
+   * setting; a refusal degrades the turn to an in-place reply.
+   * @param message - the admitted message.
+   * @param settings - the currently authoritative settings section.
+   * @returns the opened topic, or undefined when the turn stays in place.
+   */
+  private async beginTopic(message: InboundMessage, settings: FeishuSettings): Promise<OpenedTopic | undefined> {
+    if (!settings.replyInThread || message.threadId !== undefined) return undefined
+    try {
+      return await this.topics.open(message.messageId, topicSummary(message.text))
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`feishu: opening a topic for ${message.messageId} failed; replying in place: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+
   /** Process one admitted message end-to-end; never rejects. */
   private async process(message: InboundMessage): Promise<void> {
     const settings = this.settings()
     if (!this.admitted(message, settings)) return
     if (message.text === '') return
     const reactionId = await this.markThinking(message.messageId, settings)
+    const topic = await this.beginTopic(message, settings)
+    const routed: InboundMessage = topic === undefined ? message : { ...message, threadId: topic.threadId }
+    const replyTo = topic?.leadMessageId ?? message.messageId
     try {
-      const handle = await this.ensureAgent(message.chatId)
+      const handle = await this.ensureAgent(routed)
       const fromSeq = handle.agent.session.events.length
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: frameChatPrompt(message) }],
+        content: [{ type: 'text', text: frameChatPrompt(routed) }],
         source: {
           kind: 'feishu',
           chatId: message.chatId,
@@ -192,11 +255,11 @@ export class ConversationRouter {
       const form = failed
         ? this.failureForm(settings)
         : resolveReplyForm(settings.replyForm, handle.agent.session.events, fromSeq)
-      await this.reply(message.messageId, this.payload(settled, form, settings))
+      await this.reply(replyTo, this.payload(settled, form, settings))
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
       try {
-        await this.reply(message.messageId, this.payload(settings.failureNotice, this.failureForm(settings), settings))
+        await this.reply(replyTo, this.payload(settings.failureNotice, this.failureForm(settings), settings))
       } catch (noticeError: unknown) {
         // The failure notice shares the credentials and client of the failed
         // turn; a second refusal carries no additional signal.
@@ -208,30 +271,30 @@ export class ConversationRouter {
   }
 
   /**
-   * Resolve the live agent of one chat, creating or resuming it once. A live
-   * agent another channel published for the chat's session (the Web UI opened
-   * it) owns the identity — resuming the same id would collide — so it is
-   * adopted as-is; its owning channel keeps teardown.
-   * @param chatId - Feishu chat identity.
+   * Resolve the live agent of one conversation, creating or resuming it once.
+   * A live agent another channel published for the conversation's session (the
+   * Web UI opened it) owns the identity — resuming the same id would collide —
+   * so it is adopted as-is; its owning channel keeps teardown.
+   * @param message - the admitted message naming the conversation.
    * @returns the live agent view the turn runs on.
    */
-  private async ensureAgent(chatId: string): Promise<{ readonly agent: Agent }> {
-    const cached = this.handles.get(chatId)
+  private async ensureAgent(message: InboundMessage): Promise<{ readonly agent: Agent }> {
+    const sessionId = sessionKeyFor(message.chatId, message.threadId)
+    const cached = this.handles.get(sessionId)
     if (cached !== undefined && this.ctx.agents.get(cached.agent.session.id) !== undefined) return cached
-    this.handles.delete(chatId)
-    const sessionId = sessionIdForChat(chatId)
+    this.handles.delete(sessionId)
     const live = this.ctx.agents.get(sessionId)
     if (live !== undefined) {
       const adopted = { agent: live }
-      this.handles.set(chatId, adopted)
+      this.handles.set(sessionId, adopted)
       return adopted
     }
     const persisted = (await this.ctx.sessionPersistence.list())
       .some(header => header.id === sessionId)
     const handle = persisted
       ? await this.resumeAgent(sessionId)
-      : await this.createAgent(sessionId, chatId)
-    this.handles.set(chatId, handle)
+      : await this.createAgent(sessionId, message)
+    this.handles.set(sessionId, handle)
     return handle
   }
 
@@ -240,8 +303,8 @@ export class ConversationRouter {
     await this.ctx.agentPresets.mount(agentCtx, presetId)
   }
 
-  /** Create the chat's first agent session. */
-  private async createAgent(sessionId: SessionId, chatId: string): Promise<AgentHandle> {
+  /** Create the conversation's first agent session. */
+  private async createAgent(sessionId: SessionId, message: InboundMessage): Promise<AgentHandle> {
     const selection = this.ctx.agentDefaultModel.currentSelection()
     this.ctx.permissionPresets.resolve(this.options.permissionPreset)
     const preset = await this.ctx.agentPresets.resolve(this.options.agentPreset)
@@ -264,7 +327,9 @@ export class ConversationRouter {
       await workspace.attachSession(sessionId)
       attached = true
       this.ctx.permissionPresets.set(handle.agent.session, this.options.permissionPreset)
-      this.ctx.sessionTitle.rename(handle.agent.session, `Feishu chat ${chatId}`)
+      this.ctx.sessionTitle.rename(handle.agent.session, message.threadId === undefined
+        ? `Feishu chat ${message.chatId}`
+        : `Feishu chat ${message.chatId} topic ${message.threadId}`)
       return handle
     } catch (error: unknown) {
       if (attached) {

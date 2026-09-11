@@ -19,6 +19,8 @@ export interface InboundMessage {
   readonly messageId: string
   /** Chat the message arrived in; the conversation routing key. */
   readonly chatId: string
+  /** Topic thread the message belongs to (`omt_`-prefixed), when the event carries one. */
+  readonly threadId?: string
   /** `p2p` for direct chats, `group` for group chats. */
   readonly chatType: string
   /** Sender `open_id`, when the event carries one. */

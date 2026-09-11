@@ -31,7 +31,7 @@ export {
   assertSettings,
   settingsEntryOf,
 } from './config.ts'
-export { ConversationRouter, sessionIdForChat } from './conversation.ts'
+export { ConversationRouter, sessionIdForChat, sessionIdForThread } from './conversation.ts'
 export {
   EdgeController,
   resolveAppCredentials,
@@ -49,6 +49,8 @@ export { createReplySender, truncateReply } from './reply.ts'
 export type { ReplySender, ReplyContent } from './reply.ts'
 export { createReactionSender } from './reaction.ts'
 export type { ReactionSender } from './reaction.ts'
+export { createTopicOpener, topicSummary } from './topic.ts'
+export type { TopicOpener, OpenedTopic } from './topic.ts'
 export { extractReplyText, resolveReplyForm } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 

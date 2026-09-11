@@ -62,10 +62,12 @@ export function normalizeEventData(data: unknown): InboundMessage | undefined {
   const mentions: unknown = message['mentions']
   const senderId = sender === undefined ? undefined : objectField(sender, 'sender_id')
   const senderOpenId = senderId === undefined ? undefined : stringField(senderId, 'open_id')
+  const threadId = stringField(message, 'thread_id')
   return {
     messageId,
     chatId,
     chatType: stringField(message, 'chat_type') ?? 'p2p',
+    ...threadId === undefined ? {} : { threadId },
     ...senderOpenId === undefined ? {} : { senderOpenId },
     text: stripMentionPlaceholders(text),
     mentioned: Array.isArray(mentions) && mentions.length > 0,
