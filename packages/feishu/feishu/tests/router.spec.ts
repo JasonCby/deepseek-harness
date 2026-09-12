@@ -51,7 +51,7 @@ const reply = vi.fn(async (_messageId: string, _content: ReplyContent) => {})
 /** Handles the stub agent registry served, keyed by session id. */
 const servedHandles = new Map<string, AgentHandle>()
 /** Session headers the stub persistence lists. */
-let persistedHeaders: { id: string }[] = []
+let persistedHeaders: { header: { id: string } }[] = []
 
 let contexts: Context[] = []
 
@@ -60,15 +60,18 @@ function stubbedContext(): Context {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('agents', {
-    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown, agent: unknown) => Promise<void> }) => {
       const handle = buildHandle(sessionId)
-      if (setup !== undefined) await setup({ agent: handle.agent })
+      if (setup !== undefined) await setup({}, handle.agent)
       servedHandles.set(sessionId, handle)
       return handle
     }),
-    resume: vi.fn(async ({ resumeSessionId, setup }: { resumeSessionId: string; setup?: (agentCtx: unknown) => Promise<void> }) => {
+    resume: vi.fn(async ({ resumeSessionId, setup }: {
+      resumeSessionId: string
+      setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
+    }) => {
       const handle = buildHandle(resumeSessionId)
-      if (setup !== undefined) await setup({ agent: handle.agent })
+      if (setup !== undefined) await setup({}, handle.agent)
       servedHandles.set(resumeSessionId, handle)
       return handle
     }),
@@ -127,7 +130,10 @@ function buildHandle(sessionId: string): AgentHandle {
   const agent = {
     session: {
       id: sessionId,
-      events,
+      get seq(): number {
+        return events.length
+      },
+      snapshotEvents: (): readonly SessionEvent[] => events,
       header: { agentPreset: 'logged-preset' },
     },
     followup,
@@ -374,7 +380,7 @@ describe('ConversationRouter', () => {
   it('resumes a persisted chat session under its durable preset', async () => {
     const ctx = stubbedContext()
     const sessionId = sessionIdForChat('oc_1')
-    persistedHeaders = [{ id: sessionId }]
+    persistedHeaders = [{ header: { id: sessionId } }]
     const agentsStubs = ctx.get('agents') as unknown as { resume: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }
     router(ctx, settings()).accept(message())
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })

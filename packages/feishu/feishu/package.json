@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-feishu",
   "description": "Feishu (Lark) bot plugin: chat events to multi-turn DSH sessions with replies sent back",
-  "version": "0.1.2-alpha.3",
+  "version": "0.1.5-rc.2",
   "publishConfig": {
     "access": "public"
   },

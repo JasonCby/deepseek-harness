@@ -237,7 +237,7 @@ export class ConversationRouter {
     const replyTo = topic?.leadMessageId ?? message.messageId
     try {
       const handle = await this.ensureAgent(routed)
-      const fromSeq = handle.agent.session.events.length
+      const fromSeq = handle.agent.session.seq
       handle.agent.followup(createUserMessage({
         content: [{ type: 'text', text: frameChatPrompt(routed) }],
         source: {
@@ -249,12 +249,14 @@ export class ConversationRouter {
         },
       }))
       await handle.agent.whenIdle()
-      const replyText = extractReplyText(handle.agent.session.events, fromSeq)
+      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+      const replyText = extractReplyText(handle.agent.session.snapshotEvents(), fromSeq)
       const failed = replyText === undefined
       const settled = failed ? settings.failureNotice : truncateReply(replyText, settings.replyCharLimit)
       const form = failed
         ? this.failureForm(settings)
-        : resolveReplyForm(settings.replyForm, handle.agent.session.events, fromSeq)
+        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+        : resolveReplyForm(settings.replyForm, handle.agent.session.snapshotEvents(), fromSeq)
       await this.reply(replyTo, this.payload(settled, form, settings))
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -290,7 +292,7 @@ export class ConversationRouter {
       return adopted
     }
     const persisted = (await this.ctx.sessionPersistence.list())
-      .some(header => header.id === sessionId)
+      .some(snapshot => snapshot.header.id === sessionId)
     const handle = persisted
       ? await this.resumeAgent(sessionId)
       : await this.createAgent(sessionId, message)
@@ -359,10 +361,10 @@ export class ConversationRouter {
         model: selection.model,
         ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
       },
-      setup: async (agentCtx) => {
+      setup: async (agentCtx, agent) => {
         // The session header's durable preset composed this session's tools;
         // mount exactly it so replayed history stays actionable.
-        const logged = agentCtx.agent?.session.header.agentPreset
+        const logged = agent.session.header.agentPreset
         await this.mount(agentCtx, logged ?? presetId)
       },
     })
