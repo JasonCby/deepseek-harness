@@ -125,6 +125,28 @@ describe('dsh-tool-workflow', () => {
     expect(engine.disposed).toBe(1)
   })
 
+  it('projects the run identity and result as presentation meta, bounded by the render budget', async () => {
+    const { ctx, engine, parent } = await setup()
+    const pending = execute(ctx, { script: SCRIPT, meta: META }, { agent: parent })
+    await vi.waitFor(() => { expect(engine.requests.length).toBe(1) })
+    engine.settle({ value: { findings: [1, 2] }, stopReason: 'completed', agentsStarted: 7 })
+    const result = await pending
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected workflow success')
+    expect(result.meta).toEqual({ runId: 'run-1', name: 'audit', result: { findings: [1, 2] } })
+  })
+
+  it('omits an oversized result from presentation meta instead of truncating it', async () => {
+    const { ctx, engine, parent } = await setup({ maxResultChars: 8 })
+    const pending = execute(ctx, { script: SCRIPT, meta: META }, { agent: parent })
+    await vi.waitFor(() => { expect(engine.requests.length).toBe(1) })
+    engine.settle({ value: { findings: 'x'.repeat(64) }, stopReason: 'completed', agentsStarted: 1 })
+    const result = await pending
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected workflow success')
+    expect(result.meta).toEqual({ runId: 'run-1', name: 'audit' })
+  })
+
   it('records one top-level run and its members in the calling Session after cleanup', async () => {
     const { ctx, engine, parent, session } = await setup()
     const pending = execute(ctx, { script: SCRIPT, meta: META }, { agent: parent })

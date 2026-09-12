@@ -51,6 +51,13 @@ export { createReactionSender } from './reaction.ts'
 export type { ReactionSender } from './reaction.ts'
 export { createTopicOpener, topicSummary } from './topic.ts'
 export type { TopicOpener, OpenedTopic } from './topic.ts'
+export { convertCardV2toV1, matchCardTemplate, renderTemplateReply, resolveTemplateVariables } from './template.ts'
+export type {
+  CardTemplateEntry,
+  TemplateVariableRule,
+  TemplateReplyPayload,
+  ResolvedTemplateVariables,
+} from './template.ts'
 export { extractReplyText, resolveReplyForm } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 

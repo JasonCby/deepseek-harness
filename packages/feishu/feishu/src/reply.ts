@@ -2,12 +2,14 @@
 
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { FeishuCard } from './card.ts'
+import type { TemplateReplyPayload } from './template.ts'
 import type { LarkApiClient } from './lark.ts'
 
-/** One outbound reply payload: settled text as plain text or as a markdown card. */
+/** One outbound reply payload: settled text, a markdown card, or a templated card. */
 export type ReplyContent =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'card'; readonly card: FeishuCard }
+  | TemplateReplyPayload
 
 /** Sends one reply to the chat a message arrived in. */
 export type ReplySender = (messageId: string, content: ReplyContent) => Promise<void>
@@ -22,6 +24,13 @@ function wirePayload(content: ReplyContent): { msg_type: 'text' | 'interactive';
     case 'text':
       return { msg_type: 'text', content: JSON.stringify({ text: content.text }) }
     case 'card':
+      return { msg_type: 'interactive', content: JSON.stringify(content.card) }
+    case 'template':
+      return {
+        msg_type: 'interactive',
+        content: JSON.stringify({ type: 'template', data: { template_id: content.templateId, template_variable: content.variables } }),
+      }
+    case 'localCard':
       return { msg_type: 'interactive', content: JSON.stringify(content.card) }
     default:
       return assertNever(content)

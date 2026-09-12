@@ -9,6 +9,7 @@ import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
 import { createReactionSender } from '../src/reaction.ts'
 import { createTopicOpener, topicSummary } from '../src/topic.ts'
+import { convertCardV2toV1, matchCardTemplate, renderTemplateReply, resolveTemplateVariables, type CardTemplateEntry } from '../src/template.ts'
 import type { LarkApiClient } from '../src/lark.ts'
 import { extractReplyText, resolveReplyForm } from '../src/settlement.ts'
 import { sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
@@ -224,6 +225,97 @@ describe('createTopicOpener', () => {
   })
 })
 
+describe('card templates', () => {
+  /** Build one session event of the given type. */
+  function event(seq: number, type: string, data: unknown = {}): SessionEvent {
+    return { type, seq, time: 0, data } as SessionEvent
+  }
+
+  /** One turn window with a workflow call whose result carries meta. */
+  function workflowTurn(meta: unknown): SessionEvent[] {
+    return [
+      event(0, 'tool/call', { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' }),
+      event(1, 'tool-workflow/run-start', { runId: 'r1', name: 'alarm-report' }),
+      event(2, 'tool/result', {
+        turn: 0, step: 0,
+        message: { source: { kind: 'tool', callId: 'c1' }, content: [], role: 'user' },
+        meta,
+      }),
+      event(3, 'assistant/message'),
+    ]
+  }
+
+  const message = {
+    messageId: 'om_1', chatId: 'oc_1', chatType: 'p2p', senderOpenId: 'ou_1', text: 'q', mentioned: false,
+  }
+
+  const entry: CardTemplateEntry = {
+    name: 'alarm',
+    bindTool: 'workflow',
+    templateId: 'AAq1',
+    variables: {
+      who: { from: 'context', key: 'senderOpenId', required: true },
+      reply: { from: 'tool-result', path: 'result.reply', required: true },
+      note: { from: 'tool-result', path: 'result.note' },
+    },
+  }
+
+  it('matches the first bound entry, honoring the workflow-name filter', () => {
+    const events = workflowTurn({ runId: 'r1', name: 'alarm-report', result: { reply: 'done' } })
+    expect(matchCardTemplate([entry], events, 0)?.name).toBe('alarm')
+    expect(matchCardTemplate([{ ...entry, workflowName: 'other' }], events, 0)).toBeUndefined()
+    expect(matchCardTemplate([entry], [event(0, 'assistant/message')], 0)).toBeUndefined()
+  })
+
+  it('resolves context facts and tool-result paths, omitting unresolvable optionals', () => {
+    const resolved = resolveTemplateVariables(entry, workflowTurn({ runId: 'r1', name: 'alarm-report', result: { reply: 'done' } }), 0, message)
+    expect(resolved).toEqual({ variables: { who: 'ou_1', reply: 'done' } })
+  })
+
+  it('fails on missing required variables and over-long values, coercing non-strings', () => {
+    const missing = resolveTemplateVariables(entry, workflowTurn({ runId: 'r1', name: 'n', result: {} }), 0, message)
+    expect('error' in missing && missing.error).toMatch(/"reply" is unresolvable/)
+    const numeric = resolveTemplateVariables({ ...entry, variables: { count: { from: 'tool-result', path: 'result.count', required: true } } },
+      workflowTurn({ result: { count: 7 } }), 0, message)
+    expect(numeric).toEqual({ variables: { count: '7' } })
+    const overLong = resolveTemplateVariables({ ...entry, variables: { reply: { from: 'tool-result', path: 'result.reply', required: true, maxLength: 2 } } },
+      workflowTurn({ result: { reply: 'done' } }), 0, message)
+    expect('error' in overLong && overLong.error).toMatch(/"reply" exceeds 2 characters/)
+  })
+
+  it('renders platform templates and interpolated local cards', () => {
+    expect(renderTemplateReply(entry, { who: 'ou_1' })).toEqual({ kind: 'template', templateId: 'AAq1', variables: { who: 'ou_1' } })
+    const local = renderTemplateReply({ name: 'alarm', bindTool: 'workflow', card: { elements: [{ tag: 'markdown', content: 'said {{who}} and {{missing}}' }] }, variables: {} }, { who: 'ou_1' })
+    expect(local).toEqual({ kind: 'localCard', card: { elements: [{ tag: 'markdown', content: 'said ou_1 and ' }] } })
+  })
+})
+
+describe('convertCardV2toV1', () => {
+  it('lifts body elements, drops 2.0-only keys, and gives bare images an alt', () => {
+    expect(convertCardV2toV1({
+      schema: '2.0',
+      header: { template: 'blue', title: { tag: 'plain_text', content: 'T' }, text_tag_list: [{ tag: 'text_tag', element_id: 'e1', color: 'red', text: { tag: 'plain_text', content: 'x' } }] },
+      body: { elements: [
+        { tag: 'markdown', content: 'a', element_id: 'm1', margin: '0px' },
+        { tag: 'hr', element_id: 'h1' },
+        { tag: 'img', img_key: 'k', fallback_img_key: 'f', corner_radius: '4px' },
+      ] },
+    })).toEqual({
+      header: { template: 'blue', title: { tag: 'plain_text', content: 'T' }, text_tag_list: [{ tag: 'text_tag', color: 'red', text: { tag: 'plain_text', content: 'x' } }] },
+      elements: [
+        { tag: 'markdown', content: 'a' },
+        { tag: 'hr' },
+        { tag: 'img', img_key: 'k', alt: { tag: 'plain_text', content: '' } },
+      ],
+    })
+  })
+
+  it('passes non-object documents through', () => {
+    expect(convertCardV2toV1('text')).toBe('text')
+    expect(convertCardV2toV1([{ tag: 'hr', element_id: 'x' }])).toEqual([{ tag: 'hr' }])
+  })
+})
+
 describe('truncateReply', () => {
   it('keeps short text and truncates long text', () => {
     expect(truncateReply('short', 10)).toBe('short')
@@ -285,6 +377,7 @@ describe('settings validation', () => {
       thinkingEmoji: 'Typing',
       failureNotice: 'failed',
       dedupCapacity: 1024,
+      cardTemplates: [],
     }
   }
 
@@ -327,5 +420,24 @@ describe('settings validation', () => {
     expect(() => {
       assertConfig({ ...base(), workspacePath: ' ', agentPreset: 'standard', permissionPreset: 'read-only' })
     }).toThrow(/workspacePath/)
+  })
+
+  it('rejects malformed card template entries', () => {
+    const entry: CardTemplateEntry = {
+      name: 'alarm',
+      bindTool: 'workflow',
+      templateId: 'AAq1',
+      variables: { who: { from: 'context', key: 'senderOpenId' } },
+    }
+    const withTemplates = (cardTemplates: CardTemplateEntry[]): FeishuSettings => ({ ...base(), cardTemplates })
+    expect(() => { assertSettings(withTemplates([entry, { ...entry }])) }).toThrow(/names/)
+    expect(() => { assertSettings(withTemplates([{ ...entry, card: { elements: [{ tag: 'hr' }] } }])) }).toThrow(/exactly one/)
+    const { templateId: _platform, ...neither } = entry
+    const local = { ...neither, card: { elements: [{ tag: 'markdown', content: '{{who}}' }] } }
+    expect(() => { assertSettings(withTemplates([neither])) }).toThrow(/exactly one/)
+    expect(() => { assertSettings(withTemplates([{ ...neither, card: { elements: [] } }])) }).toThrow(/elements array/)
+    expect(() => { assertSettings(withTemplates([{ ...local, variables: { a: { from: 'context', key: 'nope' } } }])) }).toThrow(/context key/)
+    expect(() => { assertSettings(withTemplates([{ ...local, variables: { a: { from: 'tool-result' } } }])) }).toThrow(/tool-result path/)
+    expect(() => { assertSettings(withTemplates([local])) }).not.toThrow()
   })
 })

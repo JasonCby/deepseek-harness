@@ -6,7 +6,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-permission-presets'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import { renderMarkdownCard } from './card.ts'
 import { frameChatPrompt } from './prompt.ts'
+import { matchCardTemplate, renderTemplateReply, resolveTemplateVariables } from './template.ts'
 import type { ReplyContent, ReplySender } from './reply.ts'
 import type { ReactionSender } from './reaction.ts'
 import type { OpenedTopic, TopicOpener } from './topic.ts'
@@ -184,6 +185,51 @@ export class ConversationRouter {
   }
 
   /**
+   * Resolve the card form's payload: the first matching bound template with
+   * resolvable variables, else the markdown projection.
+   * @param settled - the settled reply text the projection fallback carries.
+   * @param message - the routed message the turn answers.
+   * @param events - the session's ordered event log.
+   * @param fromSeq - the log position just before the triggering prompt was admitted.
+   * @param settings - the currently authoritative settings section.
+   * @returns the card payload the turn delivers.
+   */
+  private cardPayload(
+    settled: string,
+    message: InboundMessage,
+    events: readonly SessionEvent[],
+    fromSeq: number,
+    settings: FeishuSettings,
+  ): ReplyContent {
+    const entry = matchCardTemplate(settings.cardTemplates, events, fromSeq)
+    if (entry !== undefined) {
+      const resolved = resolveTemplateVariables(entry, events, fromSeq, message)
+      if ('variables' in resolved) return renderTemplateReply(entry, resolved.variables)
+      this.ctx.logger.warn(`feishu: template "${entry.name}" falls back to the markdown card: ${resolved.error}`)
+    }
+    return { kind: 'card', card: renderMarkdownCard(settled, settings.cardTitle) }
+  }
+
+  /**
+   * Deliver one reply; a refused template payload retries once as the markdown
+   * projection so a misconfigured template never loses the answer.
+   * @param replyTo - the message the reply targets.
+   * @param content - the resolved reply payload.
+   * @param settled - the settled reply text the fallback projection carries.
+   * @param settings - the currently authoritative settings section.
+   * @throws when the reply (or its fallback) is refused.
+   */
+  private async deliver(replyTo: string, content: ReplyContent, settled: string, settings: FeishuSettings): Promise<void> {
+    try {
+      await this.reply(replyTo, content)
+    } catch (error: unknown) {
+      if (content.kind !== 'template' && content.kind !== 'localCard') throw error
+      this.ctx.logger.warn(`feishu: template delivery failed, retrying as the markdown card: ${error instanceof Error ? error.message : String(error)}`)
+      await this.reply(replyTo, { kind: 'card', card: renderMarkdownCard(settled, settings.cardTitle) })
+    }
+  }
+
+  /**
    * Add the configured thinking emoji to one admitted message, best-effort.
    * @param messageId - the admitted message the indicator attaches to.
    * @param settings - the currently authoritative settings section.
@@ -250,14 +296,17 @@ export class ConversationRouter {
       }))
       await handle.agent.whenIdle()
       // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-      const replyText = extractReplyText(handle.agent.session.snapshotEvents(), fromSeq)
+      const events = handle.agent.session.snapshotEvents()
+      const replyText = extractReplyText(events, fromSeq)
       const failed = replyText === undefined
       const settled = failed ? settings.failureNotice : truncateReply(replyText, settings.replyCharLimit)
       const form = failed
         ? this.failureForm(settings)
-        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-        : resolveReplyForm(settings.replyForm, handle.agent.session.snapshotEvents(), fromSeq)
-      await this.reply(replyTo, this.payload(settled, form, settings))
+        : resolveReplyForm(settings.replyForm, events, fromSeq)
+      const content: ReplyContent = form === 'card'
+        ? this.cardPayload(settled, routed, events, fromSeq, settings)
+        : { kind: 'text', text: settled }
+      await this.deliver(replyTo, content, settled, settings)
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
       try {

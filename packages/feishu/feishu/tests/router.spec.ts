@@ -29,6 +29,7 @@ function settings(): FeishuSettings {
     thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
+    cardTemplates: [],
   }
 }
 
@@ -272,6 +273,96 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
     expect(reply).toHaveBeenCalledWith('om_1', expect.objectContaining({ kind: 'text' }))
     expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledOnce()
+  })
+
+  it('renders a bound platform template for a workflow turn', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'alarm-report' } } as SessionEvent)
+      events.push({
+        type: 'tool/result', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { runId: 'r1', name: 'alarm-report', result: { reply: 'handled' } } },
+      } as unknown as SessionEvent)
+      events.push({
+        type: 'assistant/message', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
+      } as SessionEvent)
+    })
+    const live: FeishuSettings = {
+      ...settings(),
+      replyForm: 'auto',
+      cardTemplates: [{
+        name: 'alarm',
+        bindTool: 'workflow',
+        templateId: 'AAq1',
+        variables: {
+          who: { from: 'context', key: 'senderOpenId', required: true },
+          reply: { from: 'tool-result', path: 'result.reply', required: true },
+        },
+      }],
+    }
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply).toHaveBeenCalledWith('om_1', {
+      kind: 'template',
+      templateId: 'AAq1',
+      variables: { who: 'ou_1', reply: 'handled' },
+    })
+  })
+
+  it('falls back to the markdown card when a required template variable is unresolvable', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
+      events.push({
+        type: 'assistant/message', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
+      } as SessionEvent)
+    })
+    const live: FeishuSettings = {
+      ...settings(),
+      replyForm: 'auto',
+      cardTemplates: [{
+        name: 'alarm',
+        bindTool: 'workflow',
+        templateId: 'AAq1',
+        variables: { reply: { from: 'tool-result', path: 'result.reply', required: true } },
+      }],
+    }
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply.mock.calls[0]?.[1]?.kind).toBe('card')
+  })
+
+  it('retries a refused template delivery as the markdown card', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
+      events.push({
+        type: 'tool/result', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { result: { reply: 'handled' } } },
+      } as unknown as SessionEvent)
+      events.push({
+        type: 'assistant/message', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
+      } as SessionEvent)
+    })
+    const live: FeishuSettings = {
+      ...settings(),
+      replyForm: 'auto',
+      cardTemplates: [{ name: 'alarm', bindTool: 'workflow', templateId: 'AAq1', variables: {} }],
+    }
+    reply.mockRejectedValueOnce(new Error('feishu reply failed with code 230099'))
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
+    expect(reply.mock.calls[0]?.[1]?.kind).toBe('template')
+    expect(reply.mock.calls[1]?.[1]?.kind).toBe('card')
   })
 
   it('adopts a live agent another channel published instead of colliding on resume', async () => {

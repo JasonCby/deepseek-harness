@@ -27,6 +27,7 @@ function settings(): FeishuSettings {
     allowChatIds: [],
     groupRequireMention: true,
     replyInThread: false,
+    cardTemplates: [],
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
@@ -189,6 +190,22 @@ describe('EdgeController', () => {
     const call = trace.apiClients[0]?.reply.mock.calls[0]?.[0]
     expect(call?.data.msg_type).toBe('interactive')
     expect(JSON.parse(call?.data.content ?? '{}')).toMatchObject({ header: { title: { content: 'Ops' } } })
+    controller.dispose()
+    await ctx.fiber.dispose()
+  })
+
+  it('delivers template payloads as template messages', async () => {
+    const trace = fakeSdk()
+    const ctx = stubbedContext(false)
+    const controller = new EdgeController(ctx, trace.sdk, routerStub(trace), () => settings(), () => undefined)
+    controller.reconfigure()
+    await vi.waitFor(() => { expect(trace.router.setReplySender).toHaveBeenCalledOnce() })
+    const sender = trace.router.setReplySender.mock.calls[0]?.[0]
+    if (sender === undefined) throw new Error('sender was not wired')
+    await sender('om_1', { kind: 'template', templateId: 'AAq1', variables: { a: 'b' } })
+    const call = trace.apiClients[0]?.reply.mock.calls[0]?.[0]
+    expect(call?.data.msg_type).toBe('interactive')
+    expect(JSON.parse(call?.data.content ?? '{}')).toEqual({ type: 'template', data: { template_id: 'AAq1', template_variable: { a: 'b' } } })
     controller.dispose()
     await ctx.fiber.dispose()
   })

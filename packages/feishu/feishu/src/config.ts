@@ -1,6 +1,7 @@
 /** Plugin configuration and the UI-editable settings section derived from it. */
 
 import z from '@deepseek-ai/schemastery'
+import type { CardTemplateEntry, TemplateVariableRule } from './template.ts'
 import type { FeishuTransport, ReplyForm } from './types.ts'
 
 /** Default credential reference naming the Feishu app id. */
@@ -58,6 +59,8 @@ export interface FeishuSettings {
   readonly failureNotice: string
   /** Maximum remembered message identities for retry deduplication. */
   readonly dedupCapacity: number
+  /** Card templates bound to the tool turns whose replies render them. */
+  readonly cardTemplates: CardTemplateEntry[]
 }
 
 /** Full plugin configuration: the settings section plus deployment-only fields. */
@@ -69,6 +72,23 @@ export interface Config extends FeishuSettings {
   /** Sandbox and approval preset applied to each chat session. */
   readonly permissionPreset: string
 }
+
+const templateVariable: z<TemplateVariableRule> = z.object({
+  from: z.union(['context', 'tool-result'] as const),
+  key: z.string(),
+  path: z.string(),
+  required: z.boolean().default(false),
+  maxLength: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+})
+
+const cardTemplate: z<CardTemplateEntry> = z.object({
+  name: z.string(),
+  bindTool: z.string(),
+  workflowName: z.string(),
+  templateId: z.string(),
+  card: z.any(),
+  variables: z.dict(templateVariable),
+})
 
 const settingsFields = {
   transport: z.union(['websocket', 'webhook'] as const).default('websocket'),
@@ -90,6 +110,7 @@ const settingsFields = {
   thinkingEmoji: z.string().default('Typing'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
+  cardTemplates: z.array(cardTemplate).default([]),
 }
 
 /** Schema of the UI-editable settings section (namespace {@link FEISHU_SETTINGS_NAMESPACE}). */
@@ -125,6 +146,7 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     thinkingEmoji: config.thinkingEmoji,
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
+    cardTemplates: config.cardTemplates,
   }
 }
 
@@ -154,6 +176,35 @@ export function assertSettings(value: FeishuSettings): void {
   }
   if (value.allowChatIds.some(id => id.trim() !== id || id === '')) {
     throw new Error('feishu allowChatIds entries must be non-empty trimmed strings')
+  }
+  const templateNames = new Set<string>()
+  for (const template of value.cardTemplates) {
+    if (template.name.trim() === '' || templateNames.has(template.name)) {
+      throw new Error('feishu cardTemplates names must be non-empty and unique')
+    }
+    templateNames.add(template.name)
+    if (template.bindTool.trim() === '') {
+      throw new Error(`feishu cardTemplates entry "${template.name}" needs a non-empty bindTool`)
+    }
+    const hasTemplateId = template.templateId !== undefined && template.templateId !== ''
+    if (hasTemplateId === (template.card !== undefined)) {
+      throw new Error(`feishu cardTemplates entry "${template.name}" must carry exactly one of templateId or card`)
+    }
+    if (!hasTemplateId) {
+      const card = template.card as Record<string, unknown> | null
+      const elements = card !== null && typeof card === 'object' && !Array.isArray(card) ? card['elements'] : undefined
+      if (!Array.isArray(elements) || elements.length === 0) {
+        throw new Error(`feishu cardTemplates entry "${template.name}" card must be an object with a non-empty elements array`)
+      }
+    }
+    for (const [variable, rule] of Object.entries(template.variables)) {
+      if (rule.from === 'context' && !['chatId', 'senderOpenId', 'threadId'].includes(rule.key ?? '')) {
+        throw new Error(`feishu cardTemplates entry "${template.name}" variable "${variable}" needs a context key of chatId, senderOpenId, or threadId`)
+      }
+      if (rule.from === 'tool-result' && (rule.path ?? '').trim() === '') {
+        throw new Error(`feishu cardTemplates entry "${template.name}" variable "${variable}" needs a non-empty tool-result path`)
+      }
+    }
   }
 }
 

@@ -39,6 +39,7 @@ kind: "package-reference"
 | `thinkingEmoji` | 作为思考指示器括起每条获准消息的表情 key（默认 `Typing`）；留空禁用指示器。 |
 | `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000，两种形式共用）与失败回复文案。 |
 | `dedupCapacity` | 重试去重所记住的消息标识数（默认 1024）。 |
+| `cardTemplates` | 绑定工具轮次的卡片模板注册表：名称、`bindTool`（可加 `workflowName` 过滤）、平台 `templateId` 或含 `{{变量}}` 占位符的本地 `card` JSON 二选一，及逐变量提取规则（`context` 键或 `tool-result` 点路径、`required`、`maxLength`）。 |
 | `workspacePath` / `agentPreset` / `permissionPreset` | 仅部署层：会话的工作区、agent 组合与沙箱/审批预设。绝不可经设置修改。 |
 
 除最后一行外的全部字段构成 `feishu` 设置命名空间（`installSection`），设置 UI 可实时编辑，提交即热切换传输边。
@@ -56,6 +57,7 @@ kind: "package-reference"
 - `sessionIdForThread(chatId, threadId)` — 同一派生规则对会话与话题身份联合哈希；一个话题线程是主消息流之外的一个独立 session。
 - `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复（其他通道为会话发布的存活 agent——如 Web UI——直接收养而非重复恢复）、从会话日志结算轮次、以尽力而为的思考表情括起每条获准消息，并在 `replyInThread` 下为主消息流每条消息开一个 bot 话题、就地取代主消息流作答。
 - `createTopicOpener` / `topicSummary` — 开话题的回复（`reply_in_thread`，引导消息承载单行化的问题摘要）及其纯摘要投影。
+- `matchCardTemplate` / `resolveTemplateVariables` / `renderTemplateReply` / `convertCardV2toV1` — 纯卡片模板管道：按轮次工具调用做注册表匹配、从已落日志的 tool-result meta 与消息事实提取变量、渲染平台或本地载荷、以及经验证的卡片 JSON 2.0 → 1.0 投影。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
 - `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。
@@ -88,6 +90,7 @@ kind: "package-reference"
 - **入站仅文本消息** — 非文本聊天类型与消息卡片在入口归一化处丢弃；出站回复按所配 `replyForm` 取文本或卡片。
 - **话题 session 以 `thread_id` 为键** — 携带话题身份的消息路由到按话题独立的 session；普通（非话题）群里话题回复的根消息不带 `thread_id`，落在会话的主 session。
 - **`replyInThread` 依赖部署支持话题式回复** — 已在 SaaS 私聊与普通群验证；私有化部署若拒绝 `reply_in_thread`，受影响轮次一律降级为就地回复（记日志），绝不丢失。
+- **模板投递大声降级** — 变量不可解析、超长或飞书拒绝模板内容时，回复降级为 markdown 卡片（记日志）；本地卡片的 `img_key` 属于上传该图片的应用。
 - **飞书 markdown 为子集** — 卡片回复按飞书 markdown 方言渲染；GFM 表格等不支持的语法在卡片中降级。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
@@ -98,6 +101,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)；卡片模板记录于[模板 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.zh.md)。
 
 </details>
