@@ -1,14 +1,43 @@
 /** Pure-function unit tests: ingress normalization, dedup, framing, settlement, config validation. */
 
-import { describe, expect, it } from 'vitest'
+import type { ReadStream } from 'node:fs'
+import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { MessageDedup } from '../src/dedup.ts'
 import { assertConfig, assertSettings, credentialRefsOf, type FeishuSettings } from '../src/config.ts'
+import { DELIVER_TOOL_NAME, apply as applyDeliverTool } from '../src/deliver.ts'
 import { normalizeEventData } from '../src/ingress.ts'
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
-import { truncateReply } from '../src/reply.ts'
-import { extractReplyText } from '../src/settlement.ts'
+import { createFileReplySender, truncateReply } from '../src/reply.ts'
+import { extractDeliverables, extractReplyText } from '../src/settlement.ts'
 import { sessionIdForChat } from '../src/conversation.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+
+/** Tool definitions the deliver tool registered on a capture context. */
+let registeredTools: { name: string; execute: (args: { paths: string[] }, exec: unknown) => Promise<unknown> }[] = []
+
+/** One context whose tools.register captures definitions. */
+function toolCaptureContext(): { tools: { register(definition: never): void } } {
+  registeredTools = []
+  return { tools: { register: (definition: never) => { registeredTools.push(definition) } } }
+}
+
+/** The single registered deliver tool definition. */
+function deliverTool() {
+  const tool = registeredTools.find(tool => tool.name === DELIVER_TOOL_NAME)
+  expect(tool).toBeDefined()
+  return tool!
+}
+
+/** Root for deliver-tool validation fixtures. */
+let fixtureRoot: string | undefined
+
+afterEach(async () => {
+  if (fixtureRoot !== undefined) await rm(fixtureRoot, { recursive: true, force: true })
+  fixtureRoot = undefined
+})
 
 /** One flattened `im.message.receive_v1` dispatcher payload. */
 function messagePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -152,6 +181,114 @@ describe('prompt framing', () => {
     })
     expect(prompt).toContain('(no text; this message carries only attachments)')
     expect(prompt).toContain('Attachments: report.pdf, img_v3_b')
+  })
+})
+
+describe('extractDeliverables', () => {
+  /** Build one tool/call event. */
+  function toolCallEvent(seq: number, name: string, args: string): SessionEvent {
+    return {
+      type: 'tool/call',
+      seq,
+      time: 0,
+      data: { turn: 0, step: 0, callId: `c${String(seq)}`, name, arguments: args },
+    } as SessionEvent
+  }
+
+  it('collects deliver-tool declarations at or after the boundary, deduplicated', () => {
+    const events = [
+      toolCallEvent(0, DELIVER_TOOL_NAME, JSON.stringify({ paths: ['/tmp/old.pdf'] })),
+      toolCallEvent(1, DELIVER_TOOL_NAME, JSON.stringify({ paths: ['/tmp/a.pdf', '/tmp/b.csv'] })),
+      toolCallEvent(2, 'bash', '{"command":"ls"}'),
+      toolCallEvent(3, DELIVER_TOOL_NAME, JSON.stringify({ paths: ['/tmp/a.pdf', ''] })),
+      toolCallEvent(4, DELIVER_TOOL_NAME, 'not json'),
+      toolCallEvent(5, DELIVER_TOOL_NAME, JSON.stringify({ nope: true })),
+    ]
+    expect(extractDeliverables(events, 1)).toEqual(['/tmp/a.pdf', '/tmp/b.csv'])
+    expect(extractDeliverables(events, 4)).toEqual([])
+  })
+})
+
+describe('feishu_deliver tool', () => {
+  it('registers under its declared name', () => {
+    applyDeliverTool(toolCaptureContext() as never)
+    expect(deliverTool().name).toBe(DELIVER_TOOL_NAME)
+  })
+
+  it('accepts deliverable files and rejects missing, empty, oversized, and non-file paths', async () => {
+    applyDeliverTool(toolCaptureContext() as never)
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'dsh-feishu-deliver-'))
+    const good = join(fixtureRoot, 'report.md')
+    const empty = join(fixtureRoot, 'empty.txt')
+    const huge = join(fixtureRoot, 'huge.bin')
+    const missing = join(fixtureRoot, 'missing.pdf')
+    await writeFile(good, 'deliverable')
+    await writeFile(empty, '')
+    await writeFile(huge, 'x')
+    await truncate(huge, 30 * 1024 * 1024 + 1)
+    const result = await deliverTool().execute({ paths: [good, empty, huge, missing, fixtureRoot] }, undefined) as {
+      accepted: { path: string; name: string; bytes: number }[]
+      rejected: { path: string; reason: string }[]
+    }
+    expect(result.accepted).toEqual([{ path: good, name: 'report.md', bytes: 11 }])
+    expect(result.rejected.map(entry => entry.path)).toEqual([empty, huge, missing, fixtureRoot])
+    expect(result.rejected[0]?.reason).toContain('empty')
+    expect(result.rejected[1]?.reason).toContain('30 MB')
+  })
+})
+
+describe('createFileReplySender', () => {
+  it('uploads once and replies with the returned file key', async () => {
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'dsh-feishu-filereply-'))
+    const deliverable = join(fixtureRoot, 'report.md')
+    await writeFile(deliverable, 'deliverable')
+    const uploads: { name: string }[] = []
+    const replies: { messageId: string; msgType: string; content: string }[] = []
+    const client = {
+      im: {
+        v1: {
+          message: {
+            reply: async (params: { path: { message_id: string }; data: { msg_type: string; content: string } }) => {
+              replies.push({ messageId: params.path.message_id, msgType: params.data.msg_type, content: params.data.content })
+              return { code: 0 }
+            },
+          },
+          file: {
+            create: async (payload: { data: { file_name: string; file: ReadStream } }) => {
+              uploads.push({ name: payload.data.file_name })
+              // The fake consumes nothing; destroy the stream so no fd leaks.
+              payload.data.file.destroy()
+              return { file_key: 'fk_new' }
+            },
+          },
+        },
+      },
+    }
+    await createFileReplySender(client as never)('om_1', { name: 'report.md', path: deliverable })
+    expect(uploads).toEqual([{ name: 'report.md' }])
+    expect(replies).toEqual([{ messageId: 'om_1', msgType: 'file', content: JSON.stringify({ file_key: 'fk_new' }) }])
+  })
+
+  it('throws when the upload returns no key', async () => {
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'dsh-feishu-filereply-'))
+    const deliverable = join(fixtureRoot, 'x.bin')
+    await writeFile(deliverable, 'x')
+    const client = {
+      im: {
+        v1: {
+          message: { reply: async () => ({ code: 0 }) },
+          file: {
+            create: async (payload: { data: { file: ReadStream } }) => {
+              payload.data.file.destroy()
+              return null
+            },
+          },
+        },
+      },
+    }
+    await expect(
+      createFileReplySender(client as never)('om_1', { name: 'x', path: deliverable }),
+    ).rejects.toThrow(/no file_key/)
   })
 })
 

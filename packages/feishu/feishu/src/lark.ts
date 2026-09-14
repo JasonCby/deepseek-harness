@@ -1,6 +1,7 @@
 /** The Lark SDK surface this package depends on, plus its one production binding. */
 
 import type { Readable } from 'node:stream'
+import type { ReadStream } from 'node:fs'
 import { Client, Domain, EventDispatcher, LoggerLevel, WSClient, generateChallenge as sdkGenerateChallenge } from '@larksuiteoapi/node-sdk'
 
 /** Outcome of one outbound Feishu API call; the SDK resolves instead of throwing on API errors. */
@@ -15,12 +16,12 @@ export interface LarkResponse {
 export interface LarkMessageResource {
   /**
    * Reply to one message.
-   * @param params - path message identity plus text content.
+   * @param params - path message identity plus typed content (text or an uploaded file key).
    * @returns the Feishu API response envelope.
    */
   reply(params: {
     path: { message_id: string }
-    data: { msg_type: 'text'; content: string }
+    data: { msg_type: 'text' | 'file'; content: string }
   }): Promise<LarkResponse>
 }
 
@@ -38,12 +39,26 @@ export interface LarkMessageResourceApi {
   }): Promise<{ getReadableStream(): Readable }>
 }
 
+/** The `im.v1.file` resource of a Lark API client. */
+export interface LarkFileApi {
+  /**
+   * Upload one file for messaging. HTTP failures throw rather than resolving
+   * a code envelope; Feishu caps one file at 30 MB and refuses empty files.
+   * @param payload - the `stream` file type carries arbitrary content.
+   * @returns the uploaded file's key, or null/undefined when the API returned none.
+   */
+  create(payload: {
+    data: { file_type: 'stream'; file_name: string; file: ReadStream }
+  }): Promise<{ file_key?: string | undefined } | null>
+}
+
 /** The slice of a Lark API client this package uses. */
 export interface LarkApiClient {
   readonly im: {
     readonly v1: {
       readonly message: LarkMessageResource
       readonly messageResource: LarkMessageResourceApi
+      readonly file: LarkFileApi
     }
   }
 }

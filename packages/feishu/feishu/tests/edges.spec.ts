@@ -34,10 +34,10 @@ function settings(): Mutable<FeishuSettings> {
 interface SdkTrace {
   sdk: LarkSdk
   wsClients: { start: Mock; close: Mock }[]
-  apiClients: { reply: Mock; resourceGet: Mock }[]
+  apiClients: { reply: Mock; resourceGet: Mock; fileCreate: Mock }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
-  router: { accept: Mock; setReplySender: Mock; setResourceFetcher: Mock }
+  router: { accept: Mock; setReplySender: Mock; setFileReplySender: Mock; setResourceFetcher: Mock }
 }
 
 /** Build the fake SDK binding plus its trace. */
@@ -50,12 +50,13 @@ function fakeSdk(): SdkTrace {
     apiClients,
     dispatchers,
     registeredRoutes: [],
-    router: { accept: vi.fn(), setReplySender: vi.fn(), setResourceFetcher: vi.fn() },
+    router: { accept: vi.fn(), setReplySender: vi.fn(), setFileReplySender: vi.fn(), setResourceFetcher: vi.fn() },
     sdk: {
       createApiClient: () => {
         const client = {
           reply: vi.fn(async () => ({ code: 0 })),
           resourceGet: vi.fn(async () => ({ getReadableStream: () => { throw new Error('unused in edge tests') } })),
+          fileCreate: vi.fn(async () => ({ file_key: 'fk_edge' })),
         }
         apiClients.push(client)
         return client as unknown as LarkApiClient
@@ -137,6 +138,7 @@ describe('EdgeController', () => {
     controller.reconfigure()
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setFileReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setResourceFetcher).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)

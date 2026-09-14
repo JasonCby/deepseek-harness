@@ -6,7 +6,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
-import { createReplySender, type ReplySender } from './reply.ts'
+import { createFileReplySender, createReplySender, type FileReplySender, type ReplySender } from './reply.ts'
 import { createResourceFetcher, type ResourceFetcher } from './resource.ts'
 import type { ConversationRouter } from './conversation.ts'
 import type { FeishuSettings } from './config.ts'
@@ -21,6 +21,8 @@ export interface TransportEdge {
   stop(): void
   /** Replies sent through this edge's app credentials. */
   reply: ReplySender
+  /** File replies uploaded and sent through this edge's app credentials. */
+  replyFile: FileReplySender
   /** Attachment downloads served through this edge's app credentials. */
   fetchResource: ResourceFetcher
 }
@@ -113,6 +115,7 @@ export function startWebsocketEdge(
       client.close()
     },
     reply: createReplySender(api),
+    replyFile: createFileReplySender(api),
     fetchResource: createResourceFetcher(api),
   }
 }
@@ -263,6 +266,7 @@ export async function startWebhookEdge(
   return {
     stop: unregister,
     reply: createReplySender(api),
+    replyFile: createFileReplySender(api),
     fetchResource: createResourceFetcher(api),
   }
 }
@@ -331,6 +335,7 @@ export class EdgeController {
   private activate(edge: TransportEdge): void {
     this.current = edge
     this.router.setReplySender(edge.reply)
+    this.router.setFileReplySender(edge.replyFile)
     this.router.setResourceFetcher(edge.fetchResource)
   }
 }

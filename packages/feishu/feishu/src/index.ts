@@ -33,6 +33,7 @@ export {
   settingsEntryOf,
 } from './config.ts'
 export { ConversationRouter, sessionIdForChat } from './conversation.ts'
+export { DELIVER_TOOL_NAME, feishuDeliverTool } from './deliver.ts'
 export {
   EdgeController,
   resolveAppCredentials,
@@ -44,11 +45,11 @@ export { normalizeEventData } from './ingress.ts'
 export { larkSdk } from './lark.ts'
 export type { LarkSdk, LarkApiClient, LarkDispatcher, LarkWsClient, LarkResponse } from './lark.ts'
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
-export { createReplySender, truncateReply } from './reply.ts'
-export type { ReplySender } from './reply.ts'
+export { createFileReplySender, createReplySender, truncateReply } from './reply.ts'
+export type { FileReplySender, ReplySender } from './reply.ts'
 export { createResourceFetcher } from './resource.ts'
 export type { ResourceFetcher } from './resource.ts'
-export { extractReplyText } from './settlement.ts'
+export { extractDeliverables, extractReplyText } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
 /** Cordis function-plugin name. */
@@ -81,6 +82,7 @@ export function apply(ctx: Context, config: Config): void {
     { workspacePath: config.workspacePath, agentPreset: config.agentPreset, permissionPreset: config.permissionPreset },
     () => source(),
     () => Promise.reject(new Error('feishu: no transport edge is active')),
+    (_messageId, file) => Promise.reject(new Error(`feishu: no transport edge is active for delivering ${file.name}`)),
     (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
   )
   // Loader entries live in isolated realms, so the optional WebServer is only

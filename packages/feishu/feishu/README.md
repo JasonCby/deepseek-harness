@@ -72,6 +72,20 @@ Data-dependent: one prompt per admitted message. Retries are deduplicated before
 
 Append-only: each admitted message extends the conversation. Settings changes never rewrite history; a transport hot-swap touches only the edges, not the session log.
 
+### Deliverable files (`feishu_deliver`)
+
+#### What the model sees
+
+The tool's schema: one required `paths` array of absolute file paths. The description instructs the model to call it once per turn with final deliverables only — never intermediate artifacts — and states the immediate validation (exists, non-empty file, under Feishu's 30 MB cap). A call answers with `Delivery queue: <n> accepted (<names>), <m> rejected.` After the turn settles, the router replays the turn's deliver calls from the session log and uploads each declared file (`im/v1/files`, type `stream`) as its own file message; one upload failing is logged and never fails the turn, and at most 20 files go out per turn.
+
+#### Token effect
+
+Fixed schema cost on every request where the tool is visible; the paths the model submits persist in the call arguments until compaction. Delivery itself reads the durable log only and costs no model tokens.
+
+#### KV Cache effect
+
+Prefix-stable while the definition is unchanged; the tool mounts identically on created, resumed, and borrowed chat sessions.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
@@ -81,6 +95,7 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 - **Single instance per Feishu app** — Feishu's cluster mode delivers each event to one random connection, so two DSH processes on one app credential drop events randomly.
 - **Text, image, and file messages only** — other chat types (audio, video, stickers, message cards) are dropped at ingress normalization. Images arrive as file blocks, not native vision: the model reads them through its file tools, and a vision-capable model does not see image bytes natively.
 - **Attachment downloads are in-turn and unretried** — each attachment is downloaded when its message is processed; a download or save failure fails the whole turn with the failure notice, and Feishu caps message resources at 100 MB.
+- **Deliveries depend on the model calling `feishu_deliver`** — files the turn never declare stay in the workspace only; one file is capped at 30 MB (Feishu's messaging-upload limit) and arrives as a downloadable file message, with no inline image preview.
 - **Resumed chats use the deployment's default model route** — a model switch made from the Web UI does not survive a process restart for chat sessions.
 - **Unencrypted webhooks carry no signature check** — with an empty encrypt key the SDK dispatcher accepts unsigned bodies; such deployments rely on route secrecy (see the GitHub webhook guide for the isolated-listener pattern).
 

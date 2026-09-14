@@ -1,9 +1,13 @@
-/** Outbound replies: the one write path back to Feishu. */
+/** Outbound replies: the write paths back to Feishu. */
 
+import { createReadStream } from 'node:fs'
 import type { LarkApiClient } from './lark.ts'
 
 /** Sends one text reply to the chat a message arrived in. */
 export type ReplySender = (messageId: string, text: string) => Promise<void>
+
+/** Sends one file reply to the chat a message arrived in. */
+export type FileReplySender = (messageId: string, file: { name: string; path: string }) => Promise<void>
 
 /**
  * Create the reply sender over one API client.
@@ -19,6 +23,32 @@ export function createReplySender(client: LarkApiClient): ReplySender {
     })
     if (response.code !== undefined && response.code !== 0) {
       throw new Error(`feishu reply failed with code ${String(response.code)}: ${response.msg ?? 'no message'}`)
+    }
+  }
+}
+
+/**
+ * Create the file reply sender over one API client: upload the file, then
+ * reply with the returned key so the chat receives a downloadable file message.
+ * @param client - the Lark API client carrying the app credentials.
+ * @returns a sender that delivers one local file to the triggering message's chat.
+ * @throws when the upload returns no key or Feishu rejects the reply.
+ */
+export function createFileReplySender(client: LarkApiClient): FileReplySender {
+  return async (messageId, file) => {
+    const uploaded = await client.im.v1.file.create({
+      data: { file_type: 'stream', file_name: file.name, file: createReadStream(file.path) },
+    })
+    const fileKey = uploaded?.file_key
+    if (fileKey === undefined || fileKey === '') {
+      throw new Error(`feishu file upload for ${file.name} returned no file_key`)
+    }
+    const response = await client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: { msg_type: 'file', content: JSON.stringify({ file_key: fileKey }) },
+    })
+    if (response.code !== undefined && response.code !== 0) {
+      throw new Error(`feishu file reply failed with code ${String(response.code)}: ${response.msg ?? 'no message'}`)
     }
   }
 }

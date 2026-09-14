@@ -1,6 +1,7 @@
 /** Chat-to-Session routing: one multi-turn Agent session per Feishu chat. */
 
 import { createHash } from 'node:crypto'
+import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -13,14 +14,18 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import { boundContextSummary, createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
+import { feishuDeliverTool } from './deliver.ts'
 import { frameChatPrompt } from './prompt.ts'
-import type { ReplySender } from './reply.ts'
+import type { FileReplySender, ReplySender } from './reply.ts'
 import type { ResourceFetcher } from './resource.ts'
-import { extractReplyText } from './settlement.ts'
+import { extractDeliverables, extractReplyText } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
 import type { InboundMessage } from './types.ts'
 import { MessageDedup } from './dedup.ts'
+
+/** Per-turn deliverable ceiling: a safety invariant against runaway declarations, not a deployment choice. */
+const MAX_DELIVERABLES_PER_TURN = 20
 
 /**
  * Derive the deterministic session identity of one chat. A stable mapping
@@ -56,6 +61,7 @@ export class ConversationRouter {
   private readonly dedup: MessageDedup
   private workspace: Promise<Workspace> | undefined
   private reply: ReplySender
+  private replyFile: FileReplySender
   private fetchResource: ResourceFetcher
 
   /**
@@ -63,6 +69,7 @@ export class ConversationRouter {
    * @param options - composition-fixed conversation inputs.
    * @param settings - thunk returning the currently authoritative settings section.
    * @param placeholderReply - sender used before the first transport edge activates.
+   * @param placeholderFileReply - file sender used before the first transport edge activates.
    * @param placeholderFetch - resource fetcher used before the first transport edge activates.
    */
   constructor(
@@ -70,10 +77,12 @@ export class ConversationRouter {
     private readonly options: ConversationOptions,
     private readonly settings: () => FeishuSettings,
     placeholderReply: ReplySender,
+    placeholderFileReply: FileReplySender,
     placeholderFetch: ResourceFetcher,
   ) {
     this.dedup = new MessageDedup(settings().dedupCapacity)
     this.reply = placeholderReply
+    this.replyFile = placeholderFileReply
     this.fetchResource = placeholderFetch
   }
 
@@ -109,6 +118,14 @@ export class ConversationRouter {
    */
   setResourceFetcher(fetcher: ResourceFetcher): void {
     this.fetchResource = fetcher
+  }
+
+  /**
+   * Point file replies at the active transport edge's file sender.
+   * @param sender - the active edge's file reply sender.
+   */
+  setFileReplySender(sender: FileReplySender): void {
+    this.replyFile = sender
   }
 
   /** Whether one chat message passes the live allowlist and mention gates. */
@@ -149,7 +166,9 @@ export class ConversationRouter {
           ? settings.failureNotice
           : truncateReply(replyText, settings.replyCharLimit),
       )
+      await this.deliverDeclared(message.messageId, handle, fromSeq)
     } catch (error: unknown) {
+      console.error(`feishu DEBUG processing failed: ${error instanceof Error ? String(error.stack ?? error.message) : String(error)}`)
       this.ctx.logger.warn(`feishu: processing message ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
       try {
         await this.reply(message.messageId, settings.failureNotice)
@@ -180,21 +199,44 @@ export class ConversationRouter {
     return saved
   }
 
+  /**
+   * Upload the files the settled turn declared through the deliver tool, each
+   * as its own file message. One delivery failing never fails the turn — the
+   * text reply already reached the chat; the failure is logged and the
+   * remaining files still go out.
+   * @param messageId - the triggering message the files reply to.
+   * @param handle - the chat's settled agent.
+   * @param fromSeq - the log position the turn began at.
+   */
+  private async deliverDeclared(messageId: string, handle: AgentHandle, fromSeq: number): Promise<void> {
+    const deliverables = extractDeliverables(handle.agent.session.snapshotEvents(), fromSeq)
+    for (const path of deliverables.slice(0, MAX_DELIVERABLES_PER_TURN)) {
+      try {
+        await this.replyFile(messageId, { name: basename(path), path })
+      } catch (error: unknown) {
+        this.ctx.logger.warn(`feishu: delivering ${path} for ${messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
   /** Resolve the live agent of one chat, creating or resuming it once. */
   private async ensureAgent(chatId: string): Promise<AgentHandle> {
+    const cached = this.handles.get(chatId)
+    if (cached !== undefined && this.ctx.agents.get(cached.agent.session.id) !== undefined) return cached
+    this.handles.delete(chatId)
     const sessionId = sessionIdForChat(chatId)
     // Another surface (the Web UI viewing this chat's session) may already
     // hold the session's write claim with a live agent; borrowing it beats
     // failing the turn, since a second resume would collide on that claim.
     const live = this.ctx.agents.get(sessionId)
+    console.error(`feishu DEBUG ensureAgent: live=${String(live !== undefined)} sessionId=${sessionId}`)
     if (live !== undefined) {
+      // A borrowed agent's setup ran elsewhere, so its deliver tool mounts here.
+      await live.ctx.plugin(feishuDeliverTool)
       const borrowed: AgentHandle = { agent: live, dispose: async () => {} }
       this.handles.set(chatId, borrowed)
       return borrowed
     }
-    const cached = this.handles.get(chatId)
-    if (cached !== undefined && this.ctx.agents.get(cached.agent.session.id) !== undefined) return cached
-    this.handles.delete(chatId)
     const persisted = (await this.ctx.sessionPersistence.list())
       .some(snapshot => snapshot.header.id === sessionId)
     const handle = persisted
@@ -204,9 +246,10 @@ export class ConversationRouter {
     return handle
   }
 
-  /** Mount the chat composition on one unpublished agent scope. */
+  /** Mount the chat composition and the deliver tool on one unpublished agent scope. */
   private async mount(agentCtx: Context, presetId: string): Promise<void> {
     await this.ctx.agentPresets.mount(agentCtx, presetId)
+    await agentCtx.plugin(feishuDeliverTool)
   }
 
   /** Create the chat's first agent session. */

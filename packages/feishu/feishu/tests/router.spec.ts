@@ -49,6 +49,9 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 /** The single reply sender the router resolves turns into. */
 const reply = vi.fn(async (_messageId: string, _text: string) => {})
 
+/** The single file reply sender the router delivers declared files through. */
+const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
+
 /** The resource fetcher the router downloads attachments through. */
 const fetchResourceMock = vi.fn(
   async (_messageId: string, _attachment: InboundAttachment): Promise<AsyncIterable<Uint8Array>> => attachmentBytes(),
@@ -82,7 +85,7 @@ function stubbedContext(): Context {
   ctx.provide('agents', {
     create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown, agent: unknown) => Promise<void> }) => {
       const handle = buildHandle(sessionId)
-      if (setup !== undefined) await setup({}, handle.agent)
+      if (setup !== undefined) await setup(agentCtxStub(), handle.agent)
       servedHandles.set(sessionId, handle)
       return handle
     }),
@@ -91,7 +94,7 @@ function stubbedContext(): Context {
       setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
     }) => {
       const handle = buildHandle(resumeSessionId)
-      if (setup !== undefined) await setup({}, handle.agent)
+      if (setup !== undefined) await setup(agentCtxStub(), handle.agent)
       servedHandles.set(resumeSessionId, handle)
       return handle
     }),
@@ -143,6 +146,12 @@ interface FollowupMessage {
   source: { kind: string }
 }
 
+/** The agent-scoped context stub: records plugins the router mounts on it. */
+const mountedPlugins: string[] = []
+function agentCtxStub(): { plugin: (plugin: { name: string }) => Promise<void> } {
+  return { plugin: async (plugin) => { mountedPlugins.push(plugin.name) } }
+}
+
 /** Build one stub agent handle with a synchronous one-reply turn. */
 function buildHandle(sessionId: string): AgentHandle {
   const events: SessionEvent[] = []
@@ -156,6 +165,7 @@ function buildHandle(sessionId: string): AgentHandle {
   })
   disposes.set(sessionId, dispose)
   const agent = {
+    ctx: agentCtxStub(),
     session: {
       id: sessionId,
       events,
@@ -189,12 +199,15 @@ function router(ctx: Context, live: FeishuSettings): ConversationRouter {
     { workspacePath: workspace.path, agentPreset: 'standard', permissionPreset: 'read-only' },
     () => live,
     reply,
+    replyFile,
     fetchResourceMock,
   )
 }
 
 afterEach(() => {
   reply.mockClear()
+  replyFile.mockClear()
+  mountedPlugins.length = 0
   fetchResourceMock.mockClear()
   saveFileStream.mockClear()
   mount.mockClear()
@@ -226,6 +239,7 @@ describe('ConversationRouter', () => {
     expect((first?.content[0]?.text ?? '').endsWith('hello')).toBe(true)
     expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
     expect(presets.set).toHaveBeenCalledWith(expect.anything(), 'read-only')
+    expect(mountedPlugins).toContain('feishu-deliver-tool')
     expect(workspace.attachSession).toHaveBeenCalledWith(sessionId)
     expect(reply).toHaveBeenCalledWith('om_1', expect.stringMatching(/^answer /) as string)
   })
@@ -305,6 +319,62 @@ describe('ConversationRouter', () => {
     expect(saveFileStream).not.toHaveBeenCalled()
   })
 
+  it('delivers files the turn declared through the deliver tool after the text reply', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'tool/call',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, callId: 'c1', name: 'feishu_deliver', arguments: JSON.stringify({ paths: ['/tmp/report.pdf', '/tmp/data.csv'] }) },
+      } as SessionEvent)
+      events.push({
+        type: 'tool/call',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, callId: 'c2', name: 'bash', arguments: '{"command":"ls"}' },
+      } as SessionEvent)
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'files attached' }] } },
+      } as SessionEvent)
+    })
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(replyFile).toHaveBeenCalledTimes(2) })
+    expect(reply).toHaveBeenCalledWith('om_1', 'files attached')
+    // Only the deliver tool's declarations reach the upload; bash calls contribute nothing.
+    expect(replyFile).toHaveBeenNthCalledWith(1, 'om_1', { name: 'report.pdf', path: '/tmp/report.pdf' })
+    expect(replyFile).toHaveBeenNthCalledWith(2, 'om_1', { name: 'data.csv', path: '/tmp/data.csv' })
+  })
+
+  it('keeps the settled turn when one file delivery fails', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'tool/call',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, callId: 'c1', name: 'feishu_deliver', arguments: JSON.stringify({ paths: ['/tmp/only.pdf'] }) },
+      } as SessionEvent)
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'delivered' }] } },
+      } as SessionEvent)
+    })
+    replyFile.mockRejectedValueOnce(new Error('upload quota exceeded'))
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(replyFile).toHaveBeenCalledOnce() })
+    // The text reply already went out; the delivery failure never turns into the failure notice.
+    expect(reply).toHaveBeenCalledWith('om_1', 'delivered')
+    expect(reply).not.toHaveBeenCalledWith('om_1', 'processing failed')
+  })
+
   it('rolls the creation transaction back when workspace attachment fails', async () => {
     const ctx = stubbedContext()
     const sessionId = sessionIdForChat('oc_1')
@@ -324,8 +394,9 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
     expect(agentsStubs.create).not.toHaveBeenCalled()
     expect(agentsStubs.resume).not.toHaveBeenCalled()
-    // The borrowed agent received the turn directly.
+    // The borrowed agent received the turn directly, and its deliver tool mounted on the agent scope.
     expect(followups.get(sessionId)).toHaveBeenCalledOnce()
+    expect(mountedPlugins).toContain('feishu-deliver-tool')
   })
 
   it('resumes a persisted chat session under its durable preset', async () => {
