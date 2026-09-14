@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat's main stream and each of its topic threads map to their own multi-turn root Session; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API as plain text or one markdown card. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes.
+`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat's main stream and topic threads map to their own multi-turn root Session; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API as plain text or one markdown card. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes.
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ All fields except the last row form the `feishu` settings namespace (`installSec
 <a id="transports"></a>
 ## Transports
 
-- **websocket** — the SDK client (`@larksuiteoapi/node-sdk`) dials out, so no public URL, TLS terminator, or challenge handshake is needed. Feishu requires single-connection semantics per app credential; run one DSH instance per app.
+- **websocket** — the SDK client (`@larksuiteoapi/node-sdk`) dials out, so no public URL, TLS terminator, or challenge handshake is needed. Feishu requires single-connection semantics per app credential; run one DSH instance per app. A credential write re-runs the edge swap through the `credentials/reference-updated` event, so a rotated secret reconnects without a process restart.
 - **webhook** — registers one exact route on the composed WebServer (resolved through an optional `ctx.inject` ref; a webhook section without a WebServer fails the settings `validate` hook and the edge start equally loud). Point a TLS reverse proxy at an isolated listener, as the [overlay example](../../../apps/cli/config/examples/feishu-bot/cordis.yml) shows.
 
 <a id="service-api"></a>
@@ -72,7 +72,7 @@ Each admitted chat message is appended as one `user/message` whose source is `{ 
 
 #### What the model sees
 
-One `user/message` per admitted chat message. The prompt text is one fixed framing line — `Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):` with `{chatId}` and `{senderOpenId}` interpolated (`unknown` when the event carries no sender id) — followed by a blank line and the sender-written message text, which owns no trust and no length bound of its own.
+One `user/message` per admitted chat message. The prompt text is one fixed framing line — `Feishu chat message (untrusted external input; chat {chatId}, sender {senderOpenId}):` with `{chatId}` and `{senderOpenId}` interpolated (`unknown` when the event carries no sender id) — followed by a blank line and the sender-written message text, which owns no trust and no length bound of its own. Image and file messages carry one `file` content block per attachment (the LLM runtime projects each to a read-only host path the model reads with its file tools) plus an `Attachments:` line naming them; a message with no text stands in with `(no text; this message carries only attachments)`.
 
 #### Token effect
 
@@ -82,6 +82,20 @@ Data-dependent: one prompt per admitted message. Retries are deduplicated before
 
 Append-only: each admitted message extends the conversation. Settings changes never rewrite history; a transport hot-swap touches only the edges, not the session log.
 
+### Deliverable files (`feishu_deliver`)
+
+#### What the model sees
+
+The tool's schema: one required `paths` array of absolute file paths. The description instructs the model to call it once per turn with final deliverables only — never intermediate artifacts — and states the immediate validation (exists, non-empty file, under Feishu's 30 MB cap). A call answers with `Delivery queue: <n> accepted (<names>), <m> rejected.` After the turn settles, the router replays the turn's deliver calls from the session log and uploads each declared file (`im/v1/files`, type `stream`) as its own file message; one upload failing is logged and never fails the turn, and at most 20 files go out per turn.
+
+#### Token effect
+
+Fixed schema cost on every request where the tool is visible; the paths the model submits persist in the call arguments until compaction. Delivery itself reads the durable log only and costs no model tokens.
+
+#### KV Cache effect
+
+Prefix-stable while the definition is unchanged; the tool mounts identically on created, resumed, and borrowed chat sessions.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
@@ -89,7 +103,9 @@ Append-only: each admitted message extends the conversation. Settings changes ne
 - **Reply delivery is best-effort** — a process crash between turn settlement and the Feishu API call loses that reply; there is no retry queue or durable outbox.
 - **Events during a transport swap are lost** — the WSS long connection has no replay and the webhook route unregisters for the swap window (seconds).
 - **Single instance per Feishu app** — Feishu's cluster mode delivers each event to one random connection, so two DSH processes on one app credential drop events randomly.
-- **Inbound text messages only** — non-text chat types and message cards are dropped at ingress normalization; outbound replies take the configured `replyForm` (text or card).
+- **Text, image, and file messages only** — other chat types (audio, video, stickers, message cards) are dropped at ingress normalization. Images arrive as file blocks, not native vision: the model reads them through its file tools, and a vision-capable model does not see image bytes natively.
+- **Attachment downloads are in-turn and unretried** — each attachment is downloaded when its message is processed; a download or save failure fails the whole turn with the failure notice, and Feishu caps message resources at 100 MB.
+- **Deliveries depend on the model calling `feishu_deliver`** — files the turn never declare stay in the workspace only; one file is capped at 30 MB (Feishu's messaging-upload limit) and arrives as a downloadable file message, with no inline image preview.
 - **Topic sessions key on `thread_id`** — messages carrying a topic identity route to a per-topic session; in a regular (non-topic) group a topic reply's root message carries no `thread_id`, so the root lands in the chat's main session.
 - **`replyInThread` needs the thread-opening reply on the deployment** — verified on the SaaS p2p and regular-group surfaces; a private deployment that refuses `reply_in_thread` degrades every affected turn to an in-place reply (logged), never to a lost one.
 - **Template delivery falls back loudly** — an unresolvable or over-long variable and a Feishu refusal of the template content each downgrade the reply to the markdown card (logged); a local card's `img_key` belongs to the app that uploaded the image.

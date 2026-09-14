@@ -42,10 +42,10 @@ export interface FeishuSettings {
   domain?: string
   /** Literal app id; blank inherits the referenced credential. */
   appId?: string
+  /** Credential reference the app secret is read from; blank uses the plugin default. */
+  appSecretEnv?: string
   /** Chats the bot answers; empty answers every chat that reaches it. */
   allowChatIds?: string[]
-  /** Credential reference the staged app secret is written under; the plugin's default when absent. */
-  appSecretEnv?: string
 }
 
 /** What the credentials domain last reported, and for which reference. */

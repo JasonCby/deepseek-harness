@@ -6,9 +6,10 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
-import { createReplySender, type ReplySender } from './reply.ts'
+import { createFileReplySender, createReplySender, type FileReplySender, type ReplySender } from './reply.ts'
 import { createReactionSender, type ReactionSender } from './reaction.ts'
 import { createTopicOpener, type TopicOpener } from './topic.ts'
+import { createResourceFetcher, type ResourceFetcher } from './resource.ts'
 import type { ConversationRouter } from './conversation.ts'
 import type { FeishuSettings } from './config.ts'
 
@@ -26,6 +27,10 @@ export interface TransportEdge {
   reactions: ReactionSender
   /** Topic opening sent through the same credentials. */
   topics: TopicOpener
+  /** File replies uploaded and sent through this edge's app credentials. */
+  replyFile: FileReplySender
+  /** Attachment downloads served through this edge's app credentials. */
+  fetchResource: ResourceFetcher
 }
 
 /** The WebServer slice the webhook edge registers its route on. */
@@ -118,6 +123,8 @@ export function startWebsocketEdge(
     reply: createReplySender(api),
     reactions: createReactionSender(api),
     topics: createTopicOpener(api),
+    replyFile: createFileReplySender(api),
+    fetchResource: createResourceFetcher(api),
   }
 }
 
@@ -269,6 +276,8 @@ export async function startWebhookEdge(
     reply: createReplySender(api),
     reactions: createReactionSender(api),
     topics: createTopicOpener(api),
+    replyFile: createFileReplySender(api),
+    fetchResource: createResourceFetcher(api),
   }
 }
 
@@ -338,5 +347,7 @@ export class EdgeController {
     this.router.setReplySender(edge.reply)
     this.router.setReactionSender(edge.reactions)
     this.router.setTopicOpener(edge.topics)
+    this.router.setFileReplySender(edge.replyFile)
+    this.router.setResourceFetcher(edge.fetchResource)
   }
 }

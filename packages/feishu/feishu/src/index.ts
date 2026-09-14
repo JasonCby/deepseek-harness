@@ -14,6 +14,7 @@ import {
   SettingsConfig,
   assertConfig,
   assertSettings,
+  credentialRefsOf,
   settingsEntryOf,
 } from './config.ts'
 import type { FeishuSettings } from './config.ts'
@@ -22,7 +23,7 @@ import { EdgeController } from './edges.ts'
 import type { WebServerRouteRegistrar } from './edges.ts'
 import { larkSdk } from './lark.ts'
 
-export type { InboundMessage, FeishuTransport, ReplyForm, ResolvedReplyForm } from './types.ts'
+export type { InboundMessage, InboundAttachment, FeishuTransport, ReplyForm, ResolvedReplyForm } from './types.ts'
 export {
   Config,
   SettingsConfig,
@@ -32,6 +33,7 @@ export {
   settingsEntryOf,
 } from './config.ts'
 export { ConversationRouter, sessionIdForChat, sessionIdForThread } from './conversation.ts'
+export { DELIVER_TOOL_NAME, feishuDeliverTool } from './deliver.ts'
 export {
   EdgeController,
   resolveAppCredentials,
@@ -45,12 +47,14 @@ export type { LarkSdk, LarkApiClient, LarkMessageReactionResource, LarkDispatche
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
 export { renderMarkdownCard } from './card.ts'
 export type { FeishuCard } from './card.ts'
-export { createReplySender, truncateReply } from './reply.ts'
-export type { ReplySender, ReplyContent } from './reply.ts'
+export { createFileReplySender, createReplySender, truncateReply } from './reply.ts'
+export type { FileReplySender, ReplySender, ReplyContent } from './reply.ts'
 export { createReactionSender } from './reaction.ts'
 export type { ReactionSender } from './reaction.ts'
 export { createTopicOpener, topicSummary } from './topic.ts'
 export type { TopicOpener, OpenedTopic } from './topic.ts'
+export { createResourceFetcher } from './resource.ts'
+export type { ResourceFetcher } from './resource.ts'
 export { convertCardV2toV1, matchCardTemplate, normalizeTemplateCard, renderTemplateReply, resolveCardFormat, resolveTemplateVariables } from './template.ts'
 export type {
   CardInputFormat,
@@ -59,7 +63,7 @@ export type {
   TemplateReplyPayload,
   ResolvedTemplateVariables,
 } from './template.ts'
-export { extractReplyText, resolveReplyForm } from './settlement.ts'
+export { extractDeliverables, extractReplyText, resolveReplyForm } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
 /** Cordis function-plugin name. */
@@ -75,6 +79,7 @@ export const inject = [
   'sessionTitle',
   'sessionPersistence',
   'credentials',
+  'attachments',
 ]
 
 /**
@@ -91,6 +96,8 @@ export function apply(ctx: Context, config: Config): void {
     { workspacePath: config.workspacePath, agentPreset: config.agentPreset, permissionPreset: config.permissionPreset },
     () => source(),
     () => Promise.reject(new Error('feishu: no transport edge is active')),
+    (_messageId, file) => Promise.reject(new Error(`feishu: no transport edge is active for delivering ${file.name}`)),
+    (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
   )
   // Loader entries live in isolated realms, so the optional WebServer is only
   // visible through an explicit inject; the ref tracks its presence live and
@@ -109,6 +116,15 @@ export function apply(ctx: Context, config: Config): void {
       }
     })
   })
+
+  // A credential write does not change the settings section, so the edge swap
+  // above would never re-run for one; the seam's update event closes that gap.
+  ctx.effect(
+    () => ctx.on('credentials/reference-updated', (ref: string) => {
+      if (credentialRefsOf(source()).includes(ref)) controller.reconfigure()
+    }),
+    'feishu: credential updates',
+  )
 
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, FEISHU_SETTINGS_NAMESPACE, SettingsConfig, settingsEntryOf(config), {

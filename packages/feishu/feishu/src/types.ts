@@ -9,6 +9,16 @@ export type ReplyForm = 'text' | 'card' | 'auto'
 /** Reply form after `auto` has been resolved against one settled turn. */
 export type ResolvedReplyForm = 'text' | 'card'
 
+/** One downloadable media attachment an inbound message carries. */
+export interface InboundAttachment {
+  /** Message-resource API type that downloads this attachment. */
+  readonly kind: 'image' | 'file'
+  /** Feishu resource key: `image_key` for images, `file_key` for files. */
+  readonly key: string
+  /** Sender-visible filename, when the event carries one. */
+  readonly name?: string
+}
+
 /**
  * One inbound chat message normalized from the Lark SDK dispatcher payload.
  * Both transports deliver the same flattened event shape, so the core consumes
@@ -27,6 +37,8 @@ export interface InboundMessage {
   readonly senderOpenId?: string
   /** Plain text with mention placeholders stripped. */
   readonly text: string
+  /** Media attachments the message carries, in arrival order. */
+  readonly attachments: readonly InboundAttachment[]
   /** Whether the event's mention list is non-empty (the bot, in a group). */
   readonly mentioned: boolean
 }

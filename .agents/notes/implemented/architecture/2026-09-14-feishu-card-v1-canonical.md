@@ -16,6 +16,10 @@ Every local card renders and sends as canonical card JSON 1.0: top-level `config
 
 Tenants paste builder exports directly. A wrong dialect or a missing locale fails loudly at settings validation, naming the entry and the locale, before any turn renders. Multilingual rendering is deferred: one configured locale per deployment, with viewer-locale rendering joining the future 2.0 work. The settings validator delegates card-shape authority to `resolveCardFormat`, so validation and rendering cannot drift apart.
 
+## Alternatives considered
+
+Accepting only canonical 1.0 and asking tenants to convert builder exports by hand was rejected: tenants paste what the builder exports, so the multilingual share form had to validate. Completing the 2.0 projector instead was rejected because no tenant surface exports 2.0 today; it stays reserved behind the future `'v2'` dialect.
+
 ## Related decisions
 
 The [card templates note](2026-09-11-feishu-card-templates.md) owns the registry and variable pipeline; this note supersedes its 2.0-export framing of local cards.

@@ -215,6 +215,17 @@ export function assertSettings(value: FeishuSettings): void {
   }
 }
 
+/**
+ * The credential references one settings section consumes. A write to any of
+ * them changes what the next edge start resolves, so the plugin re-runs the
+ * edge swap when the credentials seam reports one updated.
+ * @param settings - the currently authoritative settings section.
+ * @returns the app-id, app-secret, verification-token, and encrypt-key references.
+ */
+export function credentialRefsOf(settings: FeishuSettings): readonly string[] {
+  return [settings.appIdEnv, settings.appSecretEnv, settings.verificationTokenEnv, settings.encryptKeyEnv]
+}
+
 /** Validate composition-only facts Schemastery cannot express. */
 export function assertConfig(config: Config): void {
   assertSettings(config)

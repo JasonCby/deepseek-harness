@@ -13,8 +13,11 @@ import type { TopicOpener } from '../src/topic.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { InboundMessage } from '../src/types.ts'
 
+/** Every field of a settings section, writable for live-edit tests. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
 /** One mutable settings section the controller reads live. */
-function settings(): FeishuSettings {
+function settings(): Mutable<FeishuSettings> {
   return {
     transport: 'websocket',
     domain: 'feishu',
@@ -58,6 +61,8 @@ interface SdkTrace {
     reply: Mock<(params: ReplyCall) => Promise<{ code: number }>>
     reactionCreate: Mock<(params: ReactionCreateCall) => Promise<{ code: number; data?: { reaction_id?: string } }>>
     reactionDelete: Mock<(params: { path: { message_id: string; reaction_id: string } }) => Promise<{ code: number }>>
+    resourceGet: Mock
+    fileCreate: Mock
   }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
@@ -66,6 +71,8 @@ interface SdkTrace {
     setReplySender: Mock<(sender: ReplySender) => void>
     setReactionSender: Mock<(sender: ReactionSender) => void>
     setTopicOpener: Mock<(opener: TopicOpener) => void>
+    setFileReplySender: Mock
+    setResourceFetcher: Mock
   }
 }
 
@@ -84,14 +91,27 @@ function fakeSdk(): SdkTrace {
       setReplySender: vi.fn((_sender: ReplySender) => {}),
       setReactionSender: vi.fn((_sender: ReactionSender) => {}),
       setTopicOpener: vi.fn((_opener: TopicOpener) => {}),
+      setFileReplySender: vi.fn(),
+      setResourceFetcher: vi.fn(),
     },
     sdk: {
       createApiClient: () => {
         const reply = vi.fn(async (_params: ReplyCall) => ({ code: 0 }))
         const reactionCreate = vi.fn(async (_params: ReactionCreateCall) => ({ code: 0, data: { reaction_id: 're_1' } }))
         const reactionDelete = vi.fn(async (_params: { path: { message_id: string; reaction_id: string } }) => ({ code: 0 }))
-        apiClients.push({ reply, reactionCreate, reactionDelete })
-        return { im: { v1: { message: { reply }, messageReaction: { create: reactionCreate, delete: reactionDelete } } } }
+        const resourceGet = vi.fn(async () => ({ getReadableStream: () => { throw new Error('unused in edge tests') } }))
+        const fileCreate = vi.fn(async () => ({ file_key: 'fk_edge' }))
+        apiClients.push({ reply, reactionCreate, reactionDelete, resourceGet, fileCreate })
+        return {
+          im: {
+            v1: {
+              message: { reply },
+              messageReaction: { create: reactionCreate, delete: reactionDelete },
+              messageResource: { get: resourceGet },
+              file: { create: fileCreate },
+            },
+          },
+        }
       },
       createWsClient: () => {
         const client = {
@@ -162,7 +182,7 @@ afterEach(() => {
 })
 
 describe('EdgeController', () => {
-  it('starts the websocket edge and wires its reply sender', async () => {
+  it('starts the websocket edge and wires its reply and download senders', async () => {
     const trace = fakeSdk()
     const ctx = stubbedContext(false)
     const live = settings()
@@ -172,6 +192,8 @@ describe('EdgeController', () => {
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setReactionSender).toHaveBeenCalledOnce()
     expect(trace.router.setTopicOpener).toHaveBeenCalledOnce()
+    expect(trace.router.setFileReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setResourceFetcher).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
     controller.dispose()

@@ -1,5 +1,7 @@
 /** The Lark SDK surface this package depends on, plus its one production binding. */
 
+import type { Readable } from 'node:stream'
+import type { ReadStream } from 'node:fs'
 import { Client, Domain, EventDispatcher, LoggerLevel, WSClient, generateChallenge as sdkGenerateChallenge } from '@larksuiteoapi/node-sdk'
 
 /** Outcome of one outbound Feishu API call; the SDK resolves instead of throwing on API errors. */
@@ -14,12 +16,12 @@ export interface LarkResponse {
 export interface LarkMessageResource {
   /**
    * Reply to one message, optionally opening a topic thread on it.
-   * @param params - path message identity plus text content.
+   * @param params - path message identity plus typed content (text, a card, or an uploaded file key).
    * @returns the Feishu API response envelope carrying the reply's identity and topic.
    */
   reply(params: {
     path: { message_id: string }
-    data: { msg_type: 'text' | 'interactive'; content: string; reply_in_thread?: boolean }
+    data: { msg_type: 'text' | 'interactive' | 'file'; content: string; reply_in_thread?: boolean }
   }): Promise<LarkResponse & {
     readonly data?: { readonly message_id?: string | undefined; readonly thread_id?: string | undefined } | undefined
   }>
@@ -46,12 +48,41 @@ export interface LarkMessageReactionResource {
   }): Promise<LarkResponse>
 }
 
+/** The `im.v1.messageResource` resource of a Lark API client. */
+export interface LarkMessageResourceApi {
+  /**
+   * Download one message's media resource. Unlike reply, HTTP failures throw
+   * rather than resolving a code envelope.
+   * @param params - download type plus message and resource identity.
+   * @returns the download wrapper; the stream is consumable once.
+   */
+  get(params: {
+    params: { type: 'image' | 'file' }
+    path: { message_id: string; file_key: string }
+  }): Promise<{ getReadableStream(): Readable }>
+}
+
+/** The `im.v1.file` resource of a Lark API client. */
+export interface LarkFileApi {
+  /**
+   * Upload one file for messaging. HTTP failures throw rather than resolving
+   * a code envelope; Feishu caps one file at 30 MB and refuses empty files.
+   * @param payload - the `stream` file type carries arbitrary content.
+   * @returns the uploaded file's key, or null/undefined when the API returned none.
+   */
+  create(payload: {
+    data: { file_type: 'stream'; file_name: string; file: ReadStream }
+  }): Promise<{ file_key?: string | undefined } | null>
+}
+
 /** The slice of a Lark API client this package uses. */
 export interface LarkApiClient {
   readonly im: {
     readonly v1: {
       readonly message: LarkMessageResource
       readonly messageReaction: LarkMessageReactionResource
+      readonly messageResource: LarkMessageResourceApi
+      readonly file: LarkFileApi
     }
   }
 }
@@ -122,7 +153,7 @@ function sdkDomainOf(domain: string): Domain | string {
   return domain
 }
 
-const loggerLevel = LoggerLevel.warn
+const loggerLevel = Number(process.env.DSH_FEISHU_SDK_LOG_LEVEL ?? LoggerLevel.warn)
 
 /** The production binding over `@larksuiteoapi/node-sdk`. */
 export const larkSdk: LarkSdk = {
