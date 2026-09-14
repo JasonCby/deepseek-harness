@@ -2,6 +2,7 @@
 
 import z from '@deepseek-ai/schemastery'
 import type { CardTemplateEntry, TemplateVariableRule } from './template.ts'
+import { resolveCardFormat } from './template.ts'
 import type { FeishuTransport, ReplyForm } from './types.ts'
 
 /** Default credential reference naming the Feishu app id. */
@@ -53,6 +54,8 @@ export interface FeishuSettings {
   readonly replyForm: ReplyForm
   /** Card header title when {@link FeishuSettings.replyForm} is `card`. */
   readonly cardTitle: string
+  /** Builder multilingual key lifted to `elements`/`header` when a template card is a builder export. */
+  readonly cardLocale: string
   /** Emoji key bracketing admitted turns as the thinking indicator; empty disables the indicator. */
   readonly thinkingEmoji: string
   /** Text replied when message processing fails before a reply exists. */
@@ -107,6 +110,7 @@ const settingsFields = {
   replyCharLimit: z.number().step(1).min(200).default(4000),
   replyForm: z.union(['text', 'card', 'auto'] as const).default('auto'),
   cardTitle: z.string().default('DSH'),
+  cardLocale: z.string().default('zh_cn'),
   thinkingEmoji: z.string().default('Typing'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
@@ -143,6 +147,7 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     replyCharLimit: config.replyCharLimit,
     replyForm: config.replyForm,
     cardTitle: config.cardTitle,
+    cardLocale: config.cardLocale,
     thinkingEmoji: config.thinkingEmoji,
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
@@ -171,6 +176,9 @@ export function assertSettings(value: FeishuSettings): void {
   if (value.cardTitle.trim() === '') {
     throw new Error('feishu cardTitle must be non-empty')
   }
+  if (value.cardLocale.trim() === '' || value.cardLocale !== value.cardLocale.trim()) {
+    throw new Error('feishu cardLocale must be a non-empty trimmed builder multilingual key')
+  }
   if (value.thinkingEmoji.trim() !== value.thinkingEmoji) {
     throw new Error('feishu thinkingEmoji must be a trimmed emoji key; use an empty string to disable the thinking indicator')
   }
@@ -191,11 +199,10 @@ export function assertSettings(value: FeishuSettings): void {
       throw new Error(`feishu cardTemplates entry "${template.name}" must carry exactly one of templateId or card`)
     }
     if (!hasTemplateId) {
-      const card = template.card as Record<string, unknown> | null
-      const elements = card !== null && typeof card === 'object' && !Array.isArray(card) ? card['elements'] : undefined
-      if (!Array.isArray(elements) || elements.length === 0) {
-        throw new Error(`feishu cardTemplates entry "${template.name}" card must be an object with a non-empty elements array`)
-      }
+      // Shape authority lives with the render pipeline: this accepts canonical
+      // card JSON 1.0 and the builder's multilingual export, and rejects card
+      // JSON 2.0 by name as long as no 'v2' dialect joins CardInputFormat.
+      resolveCardFormat(template.card, value.cardLocale, `feishu cardTemplates entry "${template.name}" card`)
     }
     for (const [variable, rule] of Object.entries(template.variables)) {
       if (rule.from === 'context' && !['chatId', 'senderOpenId', 'threadId'].includes(rule.key ?? '')) {

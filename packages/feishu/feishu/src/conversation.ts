@@ -204,7 +204,7 @@ export class ConversationRouter {
     const entry = matchCardTemplate(settings.cardTemplates, events, fromSeq)
     if (entry !== undefined) {
       const resolved = resolveTemplateVariables(entry, events, fromSeq, message)
-      if ('variables' in resolved) return renderTemplateReply(entry, resolved.variables)
+      if ('variables' in resolved) return renderTemplateReply(entry, resolved.variables, settings.cardLocale)
       this.ctx.logger.warn(`feishu: template "${entry.name}" falls back to the markdown card: ${resolved.error}`)
     }
     return { kind: 'card', card: renderMarkdownCard(settled, settings.cardTitle) }

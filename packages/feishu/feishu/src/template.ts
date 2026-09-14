@@ -1,6 +1,7 @@
 /** Card templates: registry matching, variable resolution, and payload rendering. */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { InboundMessage } from './types.ts'
 
 /** One template slot's extraction rule. */
@@ -27,7 +28,12 @@ export interface CardTemplateEntry {
   readonly workflowName?: string
   /** Platform template identity from the tenant's card builder. */
   readonly templateId?: string
-  /** Local card JSON 1.0 skeleton carrying `{{variable}}` placeholders in string values. */
+  /**
+   * Local card document carrying `{{variable}}` placeholders in string values:
+   * canonical card JSON 1.0 (top-level `elements`) or the card builder's
+   * multilingual export (`i18n_elements`/`i18n_header`, lifted from
+   * `cardLocale` at render).
+   */
   readonly card?: unknown
   /** Extraction rules keyed by template variable name. */
   readonly variables: Record<string, TemplateVariableRule>
@@ -160,44 +166,130 @@ function interpolateCard(card: unknown, variables: Record<string, string>): unkn
   return out
 }
 
+/** Card JSON dialects a local template card may carry; `'v2'` is reserved for a future release. */
+export type CardInputFormat = 'v1' | 'v1-builder-i18n'
+
+/**
+ * Resolve and validate which card JSON dialect one local card carries.
+ * Card JSON 2.0 documents fail by name so a misconfigured tenant entry is
+ * actionable at settings validation, long before a turn renders it.
+ * @param card - the configured card document.
+ * @param locale - the builder multilingual key the card must carry under `i18n_elements`.
+ * @param label - the entry description error messages cite.
+ * @returns the resolved dialect.
+ * @throws on card JSON 2.0, an unrecognized shape, or a missing locale.
+ */
+export function resolveCardFormat(card: unknown, locale: string, label: string): CardInputFormat {
+  if (card === null || typeof card !== 'object' || Array.isArray(card)) {
+    throw new Error(`${label} must be a card JSON object`)
+  }
+  const record = card as Record<string, unknown>
+  if (record['schema'] === '2.0' || record['body'] !== undefined) {
+    throw new Error(`${label} is card JSON 2.0, which is not supported yet; export a 1.0 or multilingual document from the card builder, or bind a platform templateId instead`)
+  }
+  const i18n = record['i18n_elements']
+  if (i18n !== undefined) {
+    const localeElements = i18n !== null && typeof i18n === 'object' && !Array.isArray(i18n)
+      ? (i18n as Record<string, unknown>)[locale]
+      : undefined
+    if (!Array.isArray(localeElements) || localeElements.length === 0) {
+      throw new Error(`${label} must carry a non-empty "${locale}" elements array under i18n_elements`)
+    }
+    return 'v1-builder-i18n'
+  }
+  if (Array.isArray(record['elements']) && record['elements'].length > 0) {
+    return 'v1'
+  }
+  throw new Error(`${label} must carry a non-empty top-level elements array or an i18n_elements map`)
+}
+
+/** Give every bare `img` element the `alt` object card JSON 1.0 requires. */
+function ensureImgAlt(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(ensureImgAlt)
+  if (node === null || typeof node !== 'object') return node
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) out[key] = ensureImgAlt(value)
+  if (out['tag'] === 'img' && out['alt'] === undefined) out['alt'] = { tag: 'plain_text', content: '' }
+  return out
+}
+
+/**
+ * Normalize one configured local card onto the canonical card JSON 1.0 send
+ * form: top-level `config`, an optional `header`, and a non-empty `elements`
+ * array, with every bare `img` given the `alt` 1.0 requires.
+ * @param card - the configured card document, already accepted by {@link resolveCardFormat}.
+ * @param locale - the builder multilingual key lifted to `elements` and `header`.
+ * @param label - the entry description error messages cite.
+ * @returns the canonical card JSON 1.0 document.
+ * @throws when the document no longer matches any accepted dialect.
+ */
+export function normalizeTemplateCard(card: unknown, locale: string, label: string): Record<string, unknown> {
+  const format = resolveCardFormat(card, locale, label)
+  switch (format) {
+    case 'v1':
+      return ensureImgAlt(card) as Record<string, unknown>
+    case 'v1-builder-i18n': {
+      const source = card as Record<string, unknown>
+      const lifted: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(source)) {
+        if (key === 'i18n_elements' || key === 'i18n_header') continue
+        lifted[key] = value
+      }
+      lifted['elements'] = (source['i18n_elements'] as Record<string, unknown>)[locale]
+      const header = (source['i18n_header'] as Record<string, unknown> | undefined)?.[locale]
+      if (header !== undefined) lifted['header'] = header
+      return ensureImgAlt(lifted) as Record<string, unknown>
+    }
+    default:
+      return assertNever(format)
+  }
+}
+
 /**
  * Render one entry's reply payload from resolved variables.
  * @param entry - the matched template carrying exactly one template form.
  * @param variables - resolved variable values.
- * @returns the platform template payload or the interpolated local card.
+ * @param locale - the builder multilingual key lifted when the local card is a builder export.
+ * @returns the platform template payload or the interpolated canonical card JSON 1.0.
  */
-export function renderTemplateReply(entry: CardTemplateEntry, variables: Record<string, string>): TemplateReplyPayload {
+export function renderTemplateReply(entry: CardTemplateEntry, variables: Record<string, string>, locale: string = 'zh_cn'): TemplateReplyPayload {
   if (entry.templateId !== undefined) {
     return { kind: 'template', templateId: entry.templateId, variables }
   }
-  return { kind: 'localCard', card: interpolateCard(entry.card, variables) }
+  const label = `feishu cardTemplates entry "${entry.name}" card`
+  return { kind: 'localCard', card: interpolateCard(normalizeTemplateCard(entry.card, locale, label), variables) }
 }
 
-/** Keys card JSON 2.0 added that 1.0 deployments reject or ignore; dropped on conversion. */
-const V2_ONLY_KEYS = new Set(['element_id', 'margin', 'padding', 'corner_radius', 'fallback_img_key', 'horizontal_spacing'])
+/**
+ * Keys card JSON 2.0 added that no card JSON 1.0 element accepts; dropped on
+ * projection. `margin` and `horizontal_spacing` stay: 1.0 `column_set` and
+ * `column` carry them natively.
+ */
+const V2_ONLY_KEYS = new Set(['element_id', 'padding', 'corner_radius', 'fallback_img_key'])
 
-/** Recursively drop 2.0-only keys and give bare img elements the 1.0 alt. */
-function convertNode(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(convertNode)
+/** Recursively drop card JSON 2.0-only keys from one document. */
+function dropV2Keys(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(dropV2Keys)
   if (node === null || typeof node !== 'object') return node
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
     if (V2_ONLY_KEYS.has(key)) continue
-    out[key] = convertNode(value)
-  }
-  if (out['tag'] === 'img' && out['alt'] === undefined) {
-    out['alt'] = { tag: 'plain_text', content: '' }
+    out[key] = dropV2Keys(value)
   }
   return out
 }
 
 /**
- * Project one builder-exported card JSON 2.0 document onto the 1.0 structure.
- * @param card - the 2.0 document; `body.elements` lifts to the top level.
+ * Project one card JSON 2.0 document onto the 1.0 structure: `body.elements`
+ * lifts to the top level, 2.0-only keys drop, and bare `img` elements gain
+ * the `alt` 1.0 requires. Reserved for the future `'v2'` input dialect: the
+ * accepted pipeline rejects 2.0 at {@link resolveCardFormat}, so nothing
+ * routes here until that dialect joins {@link CardInputFormat}.
+ * @param card - the 2.0 document.
  * @returns the 1.0 document with `schema` and `body` dropped.
  */
 export function convertCardV2toV1(card: unknown): unknown {
-  const converted = convertNode(card)
+  const converted = ensureImgAlt(dropV2Keys(card))
   if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) return converted
   const record = { ...(converted as Record<string, unknown>) }
   const body = record['body']

@@ -31,6 +31,7 @@ function settings(): FeishuSettings {
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
+    cardLocale: 'zh_cn',
     thinkingEmoji: 'Typing',
     failureNotice: 'failed',
     dedupCapacity: 64,

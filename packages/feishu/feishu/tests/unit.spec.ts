@@ -9,7 +9,7 @@ import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { truncateReply } from '../src/reply.ts'
 import { createReactionSender } from '../src/reaction.ts'
 import { createTopicOpener, topicSummary } from '../src/topic.ts'
-import { convertCardV2toV1, matchCardTemplate, renderTemplateReply, resolveTemplateVariables, type CardTemplateEntry } from '../src/template.ts'
+import { convertCardV2toV1, matchCardTemplate, normalizeTemplateCard, renderTemplateReply, resolveCardFormat, resolveTemplateVariables, type CardTemplateEntry } from '../src/template.ts'
 import type { LarkApiClient } from '../src/lark.ts'
 import { extractReplyText, resolveReplyForm } from '../src/settlement.ts'
 import { sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
@@ -290,8 +290,78 @@ describe('card templates', () => {
   })
 })
 
+/** The builder's multilingual export, reduced from a tenant sample. */
+const builderExport = {
+  config: { update_multi: true },
+  i18n_elements: {
+    zh_cn: [
+      { tag: 'img', img_key: 'img_v3_02gm', scale_type: 'crop_center' },
+      {
+        tag: 'column_set',
+        flex_mode: 'none',
+        horizontal_spacing: '8px',
+        margin: '16px 0px 0px 0px',
+        columns: [{ tag: 'column', width: 'weighted', weight: 1, background_style: 'grey', elements: [{ tag: 'markdown', content: '**订单金额**' }] }],
+      },
+    ],
+  },
+  i18n_header: {
+    zh_cn: { title: { tag: 'plain_text', content: '恭喜{{who}}签约' }, template: 'red' },
+  },
+}
+
+describe('card format resolution and normalization', () => {
+  const label = 'feishu cardTemplates entry "alarm" card'
+
+  it('accepts canonical card JSON 1.0 and only adds the img alt', () => {
+    expect(resolveCardFormat({ elements: [{ tag: 'hr' }] }, 'zh_cn', label)).toBe('v1')
+    expect(normalizeTemplateCard({ config: { update_multi: true }, elements: [{ tag: 'img', img_key: 'k' }] }, 'zh_cn', label)).toEqual({
+      config: { update_multi: true },
+      elements: [{ tag: 'img', img_key: 'k', alt: { tag: 'plain_text', content: '' } }],
+    })
+  })
+
+  it('lifts the configured locale out of a builder multilingual export', () => {
+    expect(resolveCardFormat(builderExport, 'zh_cn', label)).toBe('v1-builder-i18n')
+    expect(normalizeTemplateCard(builderExport, 'zh_cn', label)).toEqual({
+      config: { update_multi: true },
+      header: { title: { tag: 'plain_text', content: '恭喜{{who}}签约' }, template: 'red' },
+      elements: [
+        { tag: 'img', img_key: 'img_v3_02gm', scale_type: 'crop_center', alt: { tag: 'plain_text', content: '' } },
+        {
+          tag: 'column_set',
+          flex_mode: 'none',
+          horizontal_spacing: '8px',
+          margin: '16px 0px 0px 0px',
+          columns: [{ tag: 'column', width: 'weighted', weight: 1, background_style: 'grey', elements: [{ tag: 'markdown', content: '**订单金额**' }] }],
+        },
+      ],
+    })
+  })
+
+  it('fails loudly on card JSON 2.0, missing locales, and unrecognized shapes', () => {
+    expect(() => resolveCardFormat({ schema: '2.0', body: { elements: [] } }, 'zh_cn', label)).toThrow(/card JSON 2\.0/)
+    expect(() => resolveCardFormat({ body: { elements: [] } }, 'zh_cn', label)).toThrow(/card JSON 2\.0/)
+    expect(() => resolveCardFormat(builderExport, 'en_us', label)).toThrow(/"en_us" elements array under i18n_elements/)
+    expect(() => resolveCardFormat('text', 'zh_cn', label)).toThrow(/card JSON object/)
+    expect(() => resolveCardFormat({ header: {} }, 'zh_cn', label)).toThrow(/elements array or an i18n_elements map/)
+    expect(() => normalizeTemplateCard({ elements: [] }, 'zh_cn', label)).toThrow(/elements array/)
+  })
+
+  it('renders builder exports through the local-card path after normalization', () => {
+    const rendered = renderTemplateReply({ name: 'alarm', bindTool: 'workflow', card: builderExport, variables: {} }, { who: 'ou_1' })
+    expect(rendered.kind).toBe('localCard')
+    if (rendered.kind !== 'localCard') return
+    const card = rendered.card as Record<string, unknown>
+    expect(card['i18n_elements']).toBeUndefined()
+    expect(card['i18n_header']).toBeUndefined()
+    expect(Array.isArray(card['elements'])).toBe(true)
+    expect((card['header'] as Record<string, { content: string }>)['title']).toMatchObject({ content: '恭喜ou_1签约' })
+  })
+})
+
 describe('convertCardV2toV1', () => {
-  it('lifts body elements, drops 2.0-only keys, and gives bare images an alt', () => {
+  it('lifts body elements, drops 2.0-only keys, keeps 1.0 column spacing, and gives bare images an alt', () => {
     expect(convertCardV2toV1({
       schema: '2.0',
       header: { template: 'blue', title: { tag: 'plain_text', content: 'T' }, text_tag_list: [{ tag: 'text_tag', element_id: 'e1', color: 'red', text: { tag: 'plain_text', content: 'x' } }] },
@@ -299,13 +369,15 @@ describe('convertCardV2toV1', () => {
         { tag: 'markdown', content: 'a', element_id: 'm1', margin: '0px' },
         { tag: 'hr', element_id: 'h1' },
         { tag: 'img', img_key: 'k', fallback_img_key: 'f', corner_radius: '4px' },
+        { tag: 'column_set', element_id: 'c1', margin: '16px', horizontal_spacing: '8px', columns: [{ tag: 'column', weight: 1 }] },
       ] },
     })).toEqual({
       header: { template: 'blue', title: { tag: 'plain_text', content: 'T' }, text_tag_list: [{ tag: 'text_tag', color: 'red', text: { tag: 'plain_text', content: 'x' } }] },
       elements: [
-        { tag: 'markdown', content: 'a' },
+        { tag: 'markdown', content: 'a', margin: '0px' },
         { tag: 'hr' },
         { tag: 'img', img_key: 'k', alt: { tag: 'plain_text', content: '' } },
+        { tag: 'column_set', margin: '16px', horizontal_spacing: '8px', columns: [{ tag: 'column', weight: 1 }] },
       ],
     })
   })
@@ -374,6 +446,7 @@ describe('settings validation', () => {
       replyCharLimit: 4000,
       replyForm: 'text',
       cardTitle: 'DSH',
+      cardLocale: 'zh_cn',
       thinkingEmoji: 'Typing',
       failureNotice: 'failed',
       dedupCapacity: 1024,
@@ -439,5 +512,9 @@ describe('settings validation', () => {
     expect(() => { assertSettings(withTemplates([{ ...local, variables: { a: { from: 'context', key: 'nope' } } }])) }).toThrow(/context key/)
     expect(() => { assertSettings(withTemplates([{ ...local, variables: { a: { from: 'tool-result' } } }])) }).toThrow(/tool-result path/)
     expect(() => { assertSettings(withTemplates([local])) }).not.toThrow()
+    expect(() => { assertSettings(withTemplates([{ ...local, card: { schema: '2.0', body: { elements: [{ tag: 'hr' }] } } }])) }).toThrow(/card JSON 2\.0/)
+    expect(() => { assertSettings(withTemplates([{ ...neither, card: { i18n_elements: { en_us: [{ tag: 'hr' }] } } }])) }).toThrow(/"zh_cn" elements array/)
+    expect(() => { assertSettings(withTemplates([{ ...neither, card: builderExport }])) }).not.toThrow()
+    expect(() => { assertSettings({ ...base(), cardLocale: ' ' }) }).toThrow(/cardLocale/)
   })
 })

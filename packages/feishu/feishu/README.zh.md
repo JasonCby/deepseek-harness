@@ -39,7 +39,8 @@ kind: "package-reference"
 | `thinkingEmoji` | 作为思考指示器括起每条获准消息的表情 key（默认 `Typing`）；留空禁用指示器。 |
 | `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000，两种形式共用）与失败回复文案。 |
 | `dedupCapacity` | 重试去重所记住的消息标识数（默认 1024）。 |
-| `cardTemplates` | 绑定工具轮次的卡片模板注册表：名称、`bindTool`（可加 `workflowName` 过滤）、平台 `templateId` 或含 `{{变量}}` 占位符的本地 `card` JSON 二选一，及逐变量提取规则（`context` 键或 `tool-result` 点路径、`required`、`maxLength`）。 |
+| `cardLocale` | 模板卡片为搭建工具多语言导出时，提升为 `elements`/`header` 的语种键（默认 `zh_cn`）。 |
+| `cardTemplates` | 绑定工具轮次的卡片模板注册表：名称、`bindTool`（可加 `workflowName` 过滤）、平台 `templateId` 或含 `{{变量}}` 占位符的本地 `card` 二选一，及逐变量提取规则（`context` 键或 `tool-result` 点路径、`required`、`maxLength`）。本地卡片接受规范卡片 JSON 1.0 或搭建工具的多语言导出（`i18n_elements`/`i18n_header`，按 `cardLocale` 提升）；卡片 JSON 2.0 按名拒绝，直至 `'v2'` 方言落地。 |
 | `workspacePath` / `agentPreset` / `permissionPreset` | 仅部署层：会话的工作区、agent 组合与沙箱/审批预设。绝不可经设置修改。 |
 
 除最后一行外的全部字段构成 `feishu` 设置命名空间（`installSection`），设置 UI 可实时编辑，提交即热切换传输边。
@@ -57,7 +58,8 @@ kind: "package-reference"
 - `sessionIdForThread(chatId, threadId)` — 同一派生规则对会话与话题身份联合哈希；一个话题线程是主消息流之外的一个独立 session。
 - `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复（其他通道为会话发布的存活 agent——如 Web UI——直接收养而非重复恢复）、从会话日志结算轮次、以尽力而为的思考表情括起每条获准消息，并在 `replyInThread` 下为主消息流每条消息开一个 bot 话题、就地取代主消息流作答。
 - `createTopicOpener` / `topicSummary` — 开话题的回复（`reply_in_thread`，引导消息承载单行化的问题摘要）及其纯摘要投影。
-- `matchCardTemplate` / `resolveTemplateVariables` / `renderTemplateReply` / `convertCardV2toV1` — 纯卡片模板管道：按轮次工具调用做注册表匹配、从已落日志的 tool-result meta 与消息事实提取变量、渲染平台或本地载荷、以及经验证的卡片 JSON 2.0 → 1.0 投影。
+- `matchCardTemplate` / `resolveTemplateVariables` / `resolveCardFormat` / `normalizeTemplateCard` / `renderTemplateReply` — 纯卡片模板管道：按轮次工具调用做注册表匹配、从已落日志的 tool-result meta 与消息事实提取变量、方言解析（规范 1.0 或搭建工具多语言导出；卡片 JSON 2.0 按名拒绝）、语种提升为规范发送形态、渲染平台或本地载荷。
+- `convertCardV2toV1` — 为将来卡片 JSON 2.0 输入方言预留的投影器：提升 `body.elements`、丢弃 2.0 专属键（保留 1.0 `column_set` 原生支持的 `margin`/`horizontal_spacing`）、为裸 `img` 补 1.0 必需的 `alt`；在 `'v2'` 方言加入 `CardInputFormat` 之前没有任何路径路由至此。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
 - `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。

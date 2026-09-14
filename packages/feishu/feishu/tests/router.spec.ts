@@ -26,6 +26,7 @@ function settings(): FeishuSettings {
     replyCharLimit: 4000,
     replyForm: 'text',
     cardTitle: 'DSH',
+    cardLocale: 'zh_cn',
     thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
@@ -309,6 +310,47 @@ describe('ConversationRouter', () => {
       kind: 'template',
       templateId: 'AAq1',
       variables: { who: 'ou_1', reply: 'handled' },
+    })
+  })
+
+  it('renders a builder multilingual card export as the canonical 1.0 card', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
+      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
+      events.push({
+        type: 'tool/result', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { result: { reply: 'handled' } } },
+      } as unknown as SessionEvent)
+      events.push({
+        type: 'assistant/message', seq: events.length, time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
+      } as SessionEvent)
+    })
+    const live: FeishuSettings = {
+      ...settings(),
+      replyForm: 'auto',
+      cardTemplates: [{
+        name: 'alarm',
+        bindTool: 'workflow',
+        card: {
+          config: { update_multi: true },
+          i18n_elements: { zh_cn: [{ tag: 'markdown', content: '任务完成:{{summary}}' }] },
+          i18n_header: { zh_cn: { title: { tag: 'plain_text', content: '告警' }, template: 'red' } },
+        },
+        variables: { summary: { from: 'tool-result', path: 'result.reply', required: true } },
+      }],
+    }
+    router(ctx, live).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
+    expect(reply).toHaveBeenCalledWith('om_1', {
+      kind: 'localCard',
+      card: {
+        config: { update_multi: true },
+        header: { title: { tag: 'plain_text', content: '告警' }, template: 'red' },
+        elements: [{ tag: 'markdown', content: '任务完成:handled' }],
+      },
     })
   })
 
