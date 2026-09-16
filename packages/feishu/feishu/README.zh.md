@@ -9,12 +9,13 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话的主消息流与各话题线程映射到各自的多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 以纯文本或单张 markdown 卡片回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。
+`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话的主消息流与各话题线程映射到各自的多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 以纯文本或单张 markdown 卡片回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。交互卡片应答回合内的审批与用户提问请求：确认按钮解决审批瀑布，生成的表单解决 `ask_user_question`，回调响应本身把卡片刷新为结算样式。
 
 ## 目录
 
 - [配置](#configuration)
 - [传输](#transports)
+- [交互卡片](#interactive-cards)
 - [服务 API](#service-api)
 - [Model Experience](#model-experience)
 - [已知限制与后续工作](#known-limitations-and-deferred-work)
@@ -40,6 +41,7 @@ kind: "package-reference"
 | `replyCharLimit` / `failureNotice` | 回复截断上限（默认 4000，两种形式共用）与失败回复文案。 |
 | `dedupCapacity` | 重试去重所记住的消息标识数（默认 1024）。 |
 | `cardLocale` | 模板卡片为搭建工具多语言导出时，提升为 `elements`/`header` 的语种键（默认 `zh_cn`）。 |
+| `interactionCards` | 交互式审批/提问卡片：`enabled`（默认 `false`）；审批 `pendingCard`（本地卡片 JSON 1.0 框架，含 `{{toolName}}`/`{{reason}}`，按钮行自动追加）与 `approveLabel`/`rejectLabel`；提问 `title`/`submitLabel`；各类型的结算样式——本地 `settledCard` 框架（`{{outcome}}`/`{{decidedBy}}`/`{{summary}}`）或平台 `settledTemplateId` 恰取其一。卡片回调随控制台的回调订阅方式而定：长连接模式走 websocket 边，请求地址模式需组合 WebServer 的 `<path>/card` 路由。 |
 | `cardTemplates` | 绑定工具轮次的卡片模板注册表：名称、`bindTool`（可加 `workflowName` 过滤）、平台 `templateId` 或含 `{{变量}}` 占位符的本地 `card` 二选一，及逐变量提取规则（`context` 键或 `tool-result` 点路径、`required`、`maxLength`）。本地卡片接受规范卡片 JSON 1.0 或搭建工具的多语言导出（`i18n_elements`/`i18n_header`，按 `cardLocale` 提升）；卡片 JSON 2.0 按名拒绝，直至 `'v2'` 方言落地。 |
 | `workspacePath` / `agentPreset` / `permissionPreset` | 仅部署层：会话的工作区、agent 组合与沙箱/审批预设。绝不可经设置修改。 |
 
@@ -51,6 +53,13 @@ kind: "package-reference"
 - **websocket** —— SDK 客户端（`@larksuiteoapi/node-sdk`）外拨建连，因此无需公网地址、TLS 终结或 challenge 握手。飞书对每个应用凭据要求单连接语义；每个应用运行一个 DSH 实例。凭据写入经 `credentials/reference-updated` 事件自动重跑边切换，轮换密钥无需重启进程。
 - **webhook** —— 在所组合的 WebServer 上注册一条精确路由（经可选的 `ctx.inject` 引用解析；没有 WebServer 的 webhook 段会被设置 `validate` 钩子与边启动同样大声地拒绝）。将 TLS 反向代理指向隔离监听器，参见 [overlay 示例](../../../apps/cli/config/examples/feishu-bot/cordis.yml)。
 
+<a id="interactive-cards"></a>
+## 交互卡片
+
+当轮次的工具调用需要审批、或模型调用 `ask_user_question` 时，桥接器（挂在每个聊天 agent 的作用域世界上）用一张回复到该轮锚点消息的卡片应答：审批是两个按钮，其 value 携带交互身份；提问是一张生成的表单——带选项的题目投影为下拉选择（允许多选时为多选框），无选项题目投影为文本输入框。回调按飞书控制台卡片回调订阅方式选择的入口到达——长连接模式把 `card.action.trigger` 作为一条普通事件帧送进 websocket 边（handler 的返回值由 SDK 中继为回调响应），请求地址模式 POST 到 `<path>/card` 路由（经 SDK 卡片处理器验签）。两个入口都把回传身份匹配回挂起交互、同步解决瀑布（飞书要求三秒内响应；agent 的后续回合异步继续），并在回调响应里就地刷新卡片：结算卡以本地 JSON 1.0 文档或平台模板替换挂起卡。未组合 WebServer 时仅服务长连接模式，跳过会记日志。
+
+卡片只认领本通道正在服务的轮次：有锚点的轮次用卡片应答，其他通道驱动的轮次经 `next()` 透传，Web UI 继续应答自己的会话。请求中止按 cancelled 结算；其卡片无从刷新，迟到的点击收到已结算的 toast。事件订阅与卡片回调订阅方式在控制台里各自独立配置：长连接消息传输自然搭配长连接卡片回调；请求地址卡片回调与任一种消息传输均可并存。
+
 <a id="service-api"></a>
 ## 服务 API
 
@@ -60,6 +69,10 @@ kind: "package-reference"
 - `createTopicOpener` / `topicSummary` — 开话题的回复（`reply_in_thread`，引导消息承载单行化的问题摘要）及其纯摘要投影。
 - `matchCardTemplate` / `resolveTemplateVariables` / `resolveCardFormat` / `normalizeTemplateCard` / `renderTemplateReply` — 纯卡片模板管道：按轮次工具调用做注册表匹配、从已落日志的 tool-result meta 与消息事实提取变量、方言解析（规范 1.0 或搭建工具多语言导出；卡片 JSON 2.0 按名拒绝）、语种提升为规范发送形态、渲染平台或本地载荷。
 - `convertCardV2toV1` — 为将来卡片 JSON 2.0 输入方言预留的投影器：提升 `body.elements`、丢弃 2.0 专属键（保留 1.0 `column_set` 原生支持的 `margin`/`horizontal_spacing`）、为裸 `img` 补 1.0 必需的 `alt`；在 `'v2'` 方言加入 `CardInputFormat` 之前没有任何路径路由至此。
+- `InteractionBridge` — 插件作用域的交互卡片桥接器：按 agent 挂载的 `approval/request` 与 `user-questions/request` 应答器（有锚点的轮次认领，其余经 `next()` 透传）、以品牌化身份为键的挂起交互表，以及把一条获准回调解决为卡片刷新响应的 `dispatch`。
+- `buildApprovalCard` / `buildQuestionCard` / `buildSettledCard` — 纯卡片构建器：可配框架加生成的按钮行/表单（选项题投影为选择、无选项题为输入框），以及带 `{{outcome}}`/`{{decidedBy}}`/`{{summary}}` 占位符的结算投影。
+- `parseCardAction` — 把一条卡片动作回调在线校验收敛为身份、裁决、表单值与操作者。
+- `CardCallbackController` — `<path>/card` 路由的串行化生命周期；`reconfigure()` 跟随设置提交与凭据更新，禁用即注销。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
 - `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。
@@ -112,6 +125,9 @@ kind: "package-reference"
 - **飞书 markdown 为子集** — 卡片回复按飞书 markdown 方言渲染；GFM 表格等不支持的语法在卡片中降级。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
+- **卡片回调的投递方式由飞书控制台决定** — 长连接模式无需路由；请求地址模式需要组合 WebServer 及其 `<path>/card` 路由，缺 WebServer 时跳过并记日志。
+- **选项题不附自由文本框** — 表单卡为选项题渲染选择、为无选项题渲染一个文本输入；应答协议的 `custom` 槽位仅用于后者。
+- **中止的交互卡片保持挂起样式** — 没有回调就没有就地刷新；下一次点击收到已结算 toast。卡片实体更新 API（仅支持 JSON 2.0）不在范围内。
 
 <a id="dev-note"></a>
 ### 开发备注
@@ -119,6 +135,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)；卡片模板记录于[模板 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)；卡片模板记录于[模板 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.zh.md)；交互卡片与其回调桥接记录于[卡片交互 Note](../../../.agents/notes/implemented/architecture/2026-09-14-feishu-card-interactions.zh.md)。
 
 </details>

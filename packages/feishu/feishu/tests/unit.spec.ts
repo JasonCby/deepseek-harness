@@ -637,6 +637,11 @@ describe('settings validation', () => {
       failureNotice: 'failed',
       dedupCapacity: 1024,
       cardTemplates: [],
+      interactionCards: {
+        enabled: false,
+        approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
+        question: { title: 'Please answer', submitLabel: 'Submit' },
+      },
     }
   }
 

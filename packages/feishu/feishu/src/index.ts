@@ -19,8 +19,9 @@ import {
 } from './config.ts'
 import type { FeishuSettings } from './config.ts'
 import { ConversationRouter } from './conversation.ts'
-import { EdgeController } from './edges.ts'
+import { CardCallbackController, EdgeController } from './edges.ts'
 import type { WebServerRouteRegistrar } from './edges.ts'
+import { InteractionBridge } from './interaction.ts'
 import { larkSdk } from './lark.ts'
 
 export type { InboundMessage, InboundAttachment, FeishuTransport, ReplyForm, ResolvedReplyForm } from './types.ts'
@@ -32,15 +33,27 @@ export {
   assertSettings,
   settingsEntryOf,
 } from './config.ts'
+export type { ApprovalCardsSettings, QuestionCardsSettings, InteractionCardsSettings } from './config.ts'
 export { ConversationRouter, sessionIdForChat, sessionIdForThread } from './conversation.ts'
 export { DELIVER_TOOL_NAME, feishuDeliverTool } from './deliver.ts'
 export {
+  CardCallbackController,
   EdgeController,
   resolveAppCredentials,
+  startCardCallbackEdge,
   startWebhookEdge,
   startWebsocketEdge,
 } from './edges.ts'
-export type { TransportEdge, AppCredentials, WebServerRouteRegistrar } from './edges.ts'
+export type { TransportEdge, AppCredentials, CardCallbackEdge, WebServerRouteRegistrar } from './edges.ts'
+export { InteractionBridge, parseCardAction } from './interaction.ts'
+export type { CardAction, CardActionResponse } from './interaction.ts'
+export {
+  buildApprovalCard,
+  buildQuestionCard,
+  buildSettledCard,
+  QUESTION_FIELD_PREFIX,
+} from './interaction-card.ts'
+export type { ApprovalCardStyle, QuestionCardStyle } from './interaction-card.ts'
 export { normalizeEventData } from './ingress.ts'
 export { larkSdk } from './lark.ts'
 export type { LarkSdk, LarkApiClient, LarkMessageReactionResource, LarkDispatcher, LarkWsClient, LarkResponse } from './lark.ts'
@@ -91,6 +104,11 @@ export const inject = [
 export function apply(ctx: Context, config: Config): void {
   assertConfig(config)
   let source: () => FeishuSettings = () => settingsEntryOf(config)
+  const interactions = new InteractionBridge(
+    ctx,
+    () => source(),
+    () => Promise.reject(new Error('feishu: no transport edge is active')),
+  )
   const router = new ConversationRouter(
     ctx,
     { workspacePath: config.workspacePath, agentPreset: config.agentPreset, permissionPreset: config.permissionPreset },
@@ -99,18 +117,25 @@ export function apply(ctx: Context, config: Config): void {
     (_messageId, file) => Promise.reject(new Error(`feishu: no transport edge is active for delivering ${file.name}`)),
     (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
   )
+  router.setInteractionBridge(interactions)
   // Loader entries live in isolated realms, so the optional WebServer is only
   // visible through an explicit inject; the ref tracks its presence live and
   // arrival/disappearance re-runs an edge blocked on it.
   let webServer: WebServerRouteRegistrar | undefined
-  const controller = new EdgeController(ctx, larkSdk, router, () => source(), () => webServer)
+  const controller = new EdgeController(ctx, larkSdk, router, () => source(), () => webServer, interactions)
+  // Card callbacks follow the Feishu console's delivery config: the
+  // long-connection mode rides the websocket edge, and the request-address
+  // mode posts to this route.
+  const cardCallbacks = new CardCallbackController(ctx, larkSdk, () => source(), () => webServer, action => interactions.dispatch(action))
   ctx.effect(() => () => {
     controller.dispose()
+    cardCallbacks.dispose()
   }, 'feishu: transport edges')
   ctx.inject(['webServer'], (webCtx) => {
     webCtx.effect(() => {
       webServer = webCtx.get('webServer')
       if (source().transport === 'webhook') controller.reconfigure()
+      if (source().interactionCards.enabled) cardCallbacks.reconfigure()
       return () => {
         webServer = undefined
       }
@@ -121,7 +146,10 @@ export function apply(ctx: Context, config: Config): void {
   // above would never re-run for one; the seam's update event closes that gap.
   ctx.effect(
     () => ctx.on('credentials/reference-updated', (ref: string) => {
-      if (credentialRefsOf(source()).includes(ref)) controller.reconfigure()
+      if (credentialRefsOf(source()).includes(ref)) {
+        controller.reconfigure()
+        cardCallbacks.reconfigure()
+      }
     }),
     'feishu: credential updates',
   )
@@ -133,6 +161,7 @@ export function apply(ctx: Context, config: Config): void {
       },
       onChange: () => {
         controller.reconfigure()
+        cardCallbacks.reconfigure()
       },
       validate: (value) => {
         assertSettings(value)
@@ -143,6 +172,9 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   // Without a settings service the composition entry stays authoritative; the
-  // first installSection attach (now or later) starts the edge through onChange.
-  if (ctx.get('settings') === undefined) controller.reconfigure()
+  // first installSection attach (now or later) starts the edges through onChange.
+  if (ctx.get('settings') === undefined) {
+    controller.reconfigure()
+    if (config.interactionCards.enabled) cardCallbacks.reconfigure()
+  }
 }

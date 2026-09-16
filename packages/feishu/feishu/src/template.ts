@@ -155,7 +155,7 @@ export function resolveTemplateVariables(
 }
 
 /** Substitute `{{name}}` placeholders inside one local card's string values. */
-function interpolateCard(card: unknown, variables: Record<string, string>): unknown {
+export function interpolateCard(card: unknown, variables: Record<string, string>): unknown {
   if (typeof card === 'string') {
     return card.replace(/\{\{(\w+)\}\}/g, (_whole, name: string) => variables[name] ?? '')
   }

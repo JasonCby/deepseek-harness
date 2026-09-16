@@ -64,6 +64,44 @@ export interface FeishuSettings {
   readonly dedupCapacity: number
   /** Card templates bound to the tool turns whose replies render them. */
   readonly cardTemplates: CardTemplateEntry[]
+  /** Interactive approval and question cards, their callbacks, and their settled refreshes. */
+  readonly interactionCards: InteractionCardsSettings
+}
+
+/** Style knobs of the interactive approval confirm cards. */
+export interface ApprovalCardsSettings {
+  /** Local card JSON 1.0 frame carrying `{{toolName}}`/`{{reason}}` placeholders; the button row is appended. */
+  readonly pendingCard?: unknown
+  /** Local card JSON 1.0 frame carrying `{{outcome}}`/`{{decidedBy}}` placeholders for the callback refresh. */
+  readonly settledCard?: unknown
+  /** Platform template the callback refresh updates the card with, instead of a local settled frame. */
+  readonly settledTemplateId?: string
+  /** Approve button label. */
+  readonly approveLabel: string
+  /** Reject button label. */
+  readonly rejectLabel: string
+}
+
+/** Style knobs of the interactive ask-user form cards. */
+export interface QuestionCardsSettings {
+  /** Form card header title. */
+  readonly title: string
+  /** Form submit button label. */
+  readonly submitLabel: string
+  /** Local card JSON 1.0 frame carrying `{{outcome}}`/`{{decidedBy}}`/`{{summary}}` placeholders for the callback refresh. */
+  readonly settledCard?: unknown
+  /** Platform template the callback refresh updates the card with, instead of a local settled frame. */
+  readonly settledTemplateId?: string
+}
+
+/** Interactive cards answering in-turn approval and user-question requests. */
+export interface InteractionCardsSettings {
+  /** Whether the bridge claims those requests with cards; disabled passes them to other channels. */
+  readonly enabled: boolean
+  /** Approval confirm card knobs. */
+  readonly approval: ApprovalCardsSettings
+  /** Ask-user form card knobs. */
+  readonly question: QuestionCardsSettings
 }
 
 /** Full plugin configuration: the settings section plus deployment-only fields. */
@@ -93,6 +131,27 @@ const cardTemplate: z<CardTemplateEntry> = z.object({
   variables: z.dict(templateVariable),
 })
 
+const approvalCards: z<ApprovalCardsSettings> = z.object({
+  pendingCard: z.any(),
+  settledCard: z.any(),
+  settledTemplateId: z.string(),
+  approveLabel: z.string().default('Approve'),
+  rejectLabel: z.string().default('Reject'),
+})
+
+const questionCards: z<QuestionCardsSettings> = z.object({
+  title: z.string().default('Please answer'),
+  submitLabel: z.string().default('Submit'),
+  settledCard: z.any(),
+  settledTemplateId: z.string(),
+})
+
+const interactionCards: z<InteractionCardsSettings> = z.object({
+  enabled: z.boolean().default(false),
+  approval: approvalCards.default({ approveLabel: 'Approve', rejectLabel: 'Reject' }),
+  question: questionCards.default({ title: 'Please answer', submitLabel: 'Submit' }),
+})
+
 const settingsFields = {
   transport: z.union(['websocket', 'webhook'] as const).default('websocket'),
   domain: z.string().default('feishu'),
@@ -115,6 +174,7 @@ const settingsFields = {
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
   cardTemplates: z.array(cardTemplate).default([]),
+  interactionCards,
 }
 
 /** Schema of the UI-editable settings section (namespace {@link FEISHU_SETTINGS_NAMESPACE}). */
@@ -152,6 +212,7 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
     cardTemplates: config.cardTemplates,
+    interactionCards: config.interactionCards,
   }
 }
 
@@ -212,6 +273,31 @@ export function assertSettings(value: FeishuSettings): void {
         throw new Error(`feishu cardTemplates entry "${template.name}" variable "${variable}" needs a non-empty tool-result path`)
       }
     }
+  }
+  const cards = value.interactionCards
+  if (cards.approval.approveLabel.trim() === '' || cards.approval.rejectLabel.trim() === '') {
+    throw new Error('feishu interactionCards approval labels must be non-empty')
+  }
+  if (cards.question.title.trim() === '' || cards.question.submitLabel.trim() === '') {
+    throw new Error('feishu interactionCards question title and submit label must be non-empty')
+  }
+  // A pending card must be a local document: the builder appends the buttons
+  // carrying the interaction identity, which a platform template cannot host.
+  if (cards.approval.pendingCard !== undefined) {
+    resolveCardFormat(cards.approval.pendingCard, value.cardLocale, 'feishu interactionCards approval pendingCard')
+  }
+  assertSettledStyle('approval', cards.approval.settledCard, cards.approval.settledTemplateId, value.cardLocale)
+  assertSettledStyle('question', cards.question.settledCard, cards.question.settledTemplateId, value.cardLocale)
+}
+
+/** Validate one interaction kind's settled style: never both a local card and a platform template. */
+function assertSettledStyle(kind: 'approval' | 'question', card: unknown, templateId: string | undefined, locale: string): void {
+  const hasTemplate = templateId !== undefined && templateId !== ''
+  if (hasTemplate && card !== undefined) {
+    throw new Error(`feishu interactionCards ${kind} settled style must carry at most one of settledCard or settledTemplateId`)
+  }
+  if (!hasTemplate && card !== undefined) {
+    resolveCardFormat(card, locale, `feishu interactionCards ${kind} settledCard`)
   }
 }
 
