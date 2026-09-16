@@ -45,11 +45,11 @@ export { normalizeEventData } from './ingress.ts'
 export { larkSdk } from './lark.ts'
 export type { LarkSdk, LarkApiClient, LarkDispatcher, LarkWsClient, LarkResponse } from './lark.ts'
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
-export { createFileReplySender, createReplySender, truncateReply } from './reply.ts'
-export type { FileReplySender, ReplySender } from './reply.ts'
+export { createCardReplySender, createFileReplySender, createReplySender, truncateReply } from './reply.ts'
+export type { CardReplySender, FileReplySender, ReplySender } from './reply.ts'
 export { createResourceFetcher } from './resource.ts'
 export type { ResourceFetcher } from './resource.ts'
-export { extractDeliverables, extractReplyText } from './settlement.ts'
+export { extractCards, extractDeliverables, extractReplyText } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
 /** Cordis function-plugin name. */
@@ -84,6 +84,7 @@ export function apply(ctx: Context, config: Config): void {
     () => Promise.reject(new Error('feishu: no transport edge is active')),
     (_messageId, file) => Promise.reject(new Error(`feishu: no transport edge is active for delivering ${file.name}`)),
     (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
+    (_messageId, _card) => Promise.reject(new Error('feishu: no transport edge is active for delivering card')),
   )
   // Loader entries live in isolated realms, so the optional WebServer is only
   // visible through an explicit inject; the ref tracks its presence live and

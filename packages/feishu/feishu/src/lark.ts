@@ -16,12 +16,13 @@ export interface LarkResponse {
 export interface LarkMessageResource {
   /**
    * Reply to one message.
-   * @param params - path message identity plus typed content (text or an uploaded file key).
+   * @param params - path message identity plus typed content: plain text, an
+   * uploaded file key, or a serialized interactive card.
    * @returns the Feishu API response envelope.
    */
   reply(params: {
     path: { message_id: string }
-    data: { msg_type: 'text' | 'file'; content: string }
+    data: { msg_type: 'text' | 'file' | 'interactive'; content: string }
   }): Promise<LarkResponse>
 }
 

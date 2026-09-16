@@ -37,7 +37,7 @@ interface SdkTrace {
   apiClients: { reply: Mock; resourceGet: Mock; fileCreate: Mock }[]
   dispatchers: { register: Mock; invoke: Mock }[]
   registeredRoutes: { kind: string; path: string; handler: unknown }[]
-  router: { accept: Mock; setReplySender: Mock; setFileReplySender: Mock; setResourceFetcher: Mock }
+  router: { accept: Mock; setReplySender: Mock; setFileReplySender: Mock; setCardReplySender: Mock; setResourceFetcher: Mock }
 }
 
 /** Build the fake SDK binding plus its trace. */
@@ -50,7 +50,13 @@ function fakeSdk(): SdkTrace {
     apiClients,
     dispatchers,
     registeredRoutes: [],
-    router: { accept: vi.fn(), setReplySender: vi.fn(), setFileReplySender: vi.fn(), setResourceFetcher: vi.fn() },
+    router: {
+      accept: vi.fn(),
+      setReplySender: vi.fn(),
+      setFileReplySender: vi.fn(),
+      setCardReplySender: vi.fn(),
+      setResourceFetcher: vi.fn(),
+    },
     sdk: {
       createApiClient: () => {
         const client = {
@@ -139,6 +145,7 @@ describe('EdgeController', () => {
     await vi.waitFor(() => { expect(trace.wsClients[0]?.start).toHaveBeenCalledOnce() })
     expect(trace.router.setReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setFileReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setCardReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setResourceFetcher).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)

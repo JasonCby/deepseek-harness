@@ -9,6 +9,9 @@ export type ReplySender = (messageId: string, text: string) => Promise<void>
 /** Sends one file reply to the chat a message arrived in. */
 export type FileReplySender = (messageId: string, file: { name: string; path: string }) => Promise<void>
 
+/** Sends one interactive card reply to the chat a message arrived in. */
+export type CardReplySender = (messageId: string, card: Record<string, unknown>) => Promise<void>
+
 /**
  * Create the reply sender over one API client.
  * @param client - the Lark API client carrying the app credentials.
@@ -23,6 +26,24 @@ export function createReplySender(client: LarkApiClient): ReplySender {
     })
     if (response.code !== undefined && response.code !== 0) {
       throw new Error(`feishu reply failed with code ${String(response.code)}: ${response.msg ?? 'no message'}`)
+    }
+  }
+}
+
+/**
+ * Create the interactive-card reply sender over one API client.
+ * @param client - the Lark API client carrying the app credentials.
+ * @returns a sender that replies with one Feishu message card (`msg_type: interactive`).
+ * @throws when Feishu rejects the card (non-zero response code).
+ */
+export function createCardReplySender(client: LarkApiClient): CardReplySender {
+  return async (messageId, card) => {
+    const response = await client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: { msg_type: 'interactive', content: JSON.stringify(card) },
+    })
+    if (response.code !== undefined && response.code !== 0) {
+      throw new Error(`feishu card reply failed with code ${String(response.code)}: ${response.msg ?? 'no message'}`)
     }
   }
 }
