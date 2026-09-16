@@ -1,4 +1,4 @@
-/** Transport-edge and EdgeController tests over a fake Lark SDK binding. */
+/** T02: transport-edge and EdgeController tests over a fake Lark SDK binding. */
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ServerResponse, IncomingMessage } from 'node:http'
