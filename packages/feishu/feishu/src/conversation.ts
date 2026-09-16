@@ -33,8 +33,52 @@ const MAX_DELIVERABLES_PER_TURN = 20
 /** Messages whose trimmed text equals one of these start a fresh session for the chat. */
 const RESET_COMMANDS = new Set(['/new', '/reset', '/新会话'])
 
-/** Reply sent when a reset command lands. */
-const RESET_NOTICE = '已开启新会话，此前的对话上下文已清空。'
+/** Command listing the chat's session generations. */
+const LIST_COMMAND = '/sessions'
+
+/** Command moving the chat's routing pointer, with its generation argument. */
+const SWITCH_PATTERN = /^\/switch(?:\s+(\S+))?$/
+
+/** Reply sent when a reset command lands, naming the generation just opened. */
+function resetNotice(epoch: number): string {
+  return `已开启新会话（#${String(epoch)}）。输入 /sessions 可查看历史会话，/switch <序号> 可切回。`
+}
+
+/** Cap on listed generations so a long-lived chat never floods the reply. */
+const MAX_LISTED_GENERATIONS = 20
+
+/** Short display form of one generation's session id. */
+function shortSessionId(sessionId: string): string {
+  return sessionId.slice(0, 'feishu-'.length + 8)
+}
+
+/** Format one generation's creation time for the session list. */
+function formatGenerationTime(createdAt: number): string {
+  return new Date(createdAt).toLocaleString('zh-CN', { hour12: false })
+}
+
+/** One chat's generation state: where messages route now, and the ceiling ever opened. */
+interface ChatGenerations {
+  /** Generation the chat currently routes to. */
+  current: number
+  /** Highest generation ever opened; /new advances it so session ids never collide. */
+  max: number
+}
+
+/** Interpret one persisted per-chat value, accepting the legacy bare-epoch format. */
+function parseGenerations(value: unknown): ChatGenerations | undefined {
+  if (Number.isSafeInteger(value) && (value as number) > 0) {
+    return { current: value as number, max: value as number }
+  }
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const { current, max } = value as Record<string, unknown>
+    if (Number.isSafeInteger(current) && Number.isSafeInteger(max)
+      && (current as number) >= 0 && (max as number) >= (current as number)) {
+      return { current: current as number, max: max as number }
+    }
+  }
+  return undefined
+}
 
 /**
  * Derive the deterministic session identity of one chat generation. A stable
@@ -70,10 +114,10 @@ export interface ConversationOptions {
 export class ConversationRouter {
   private readonly handles = new Map<string, AgentHandle>()
   private readonly queues = new Map<string, Promise<void>>()
-  /** Chat generation counter; a reset command bumps it so the next session id differs. */
-  private readonly epochs = new Map<string, number>()
-  /** Whether the persisted epoch file has been loaded into memory. */
-  private epochsLoaded = false
+  /** Per-chat routing pointer and generation ceiling; a reset bumps max so ids never collide. */
+  private readonly generations = new Map<string, ChatGenerations>()
+  /** Whether the persisted generation file has been loaded into memory. */
+  private generationsLoaded = false
   private readonly dedup: MessageDedup
   private workspace: Promise<Workspace> | undefined
   private reply: ReplySender
@@ -168,15 +212,21 @@ export class ConversationRouter {
     const settings = this.settings()
     if (!this.admitted(message, settings)) return
     if (message.text === '' && message.attachments.length === 0) return
-    // Reset commands never reach the agent: retire the live handle and bump the
-    // chat generation so the next message opens a fresh session.
-    if (RESET_COMMANDS.has(message.text.trim())) {
-      await this.resetChat(message.chatId)
-      try {
-        await this.reply(message.messageId, RESET_NOTICE)
-      } catch (error: unknown) {
-        this.ctx.logger.warn(`feishu: reset notice for ${message.messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
+    // Commands never reach the agent: they adjust local routing state and
+    // answer directly, leaving no trace in the session log.
+    const command = message.text.trim()
+    if (RESET_COMMANDS.has(command)) {
+      const epoch = await this.resetChat(message.chatId)
+      await this.replyCommand(message.messageId, resetNotice(epoch))
+      return
+    }
+    if (command === LIST_COMMAND) {
+      await this.replyCommand(message.messageId, await this.sessionListText(message.chatId))
+      return
+    }
+    const switchTarget = SWITCH_PATTERN.exec(command)
+    if (switchTarget !== null) {
+      await this.replyCommand(message.messageId, await this.switchChat(message.chatId, switchTarget[1]))
       return
     }
     try {
@@ -250,17 +300,16 @@ export class ConversationRouter {
   }
 
   /** Load persisted chat generations once; a missing or corrupt file starts fresh. */
-  private async loadEpochs(): Promise<void> {
-    if (this.epochsLoaded) return
-    this.epochsLoaded = true
+  private async loadGenerations(): Promise<void> {
+    if (this.generationsLoaded) return
+    this.generationsLoaded = true
     try {
       const raw = await readFile(this.epochsPath(), 'utf8')
       const parsed: unknown = JSON.parse(raw)
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        for (const [chatId, epoch] of Object.entries(parsed as Record<string, unknown>)) {
-          if (Number.isSafeInteger(epoch) && (epoch as number) > 0) {
-            this.epochs.set(chatId, epoch as number)
-          }
+        for (const [chatId, value] of Object.entries(parsed as Record<string, unknown>)) {
+          const state = parseGenerations(value)
+          if (state !== undefined) this.generations.set(chatId, state)
         }
       }
     } catch {
@@ -269,29 +318,106 @@ export class ConversationRouter {
   }
 
   /** Persist the chat generations atomically so a crash never loses the latest reset. */
-  private async saveEpochs(): Promise<void> {
+  private async saveGenerations(): Promise<void> {
     const path = this.epochsPath()
     const tmp = join(dirname(path), `.feishu-router-state.${randomUUID()}.tmp`)
-    await writeFile(tmp, JSON.stringify(Object.fromEntries(this.epochs), null, 2), 'utf8')
+    await writeFile(tmp, JSON.stringify(Object.fromEntries(this.generations), null, 2), 'utf8')
     await rename(tmp, path)
   }
 
-  /**
-   * Unbind one chat's live agent from its chat channel and bump its generation.
-   * The old agent stays alive in the agent registry and its persisted session
-   * stays on disk, so it keeps showing up in the Web UI and remains openable;
-   * only the chat's routing pointer moves on to a fresh session id.
-   * @param chatId - chat whose conversation is being reset.
-   */
-  private async resetChat(chatId: string): Promise<void> {
-    await this.loadEpochs()
-    this.handles.delete(chatId)
-    this.epochs.set(chatId, (this.epochs.get(chatId) ?? 0) + 1)
+  /** Reply to one command; a failed notice is logged, never thrown. */
+  private async replyCommand(messageId: string, text: string): Promise<void> {
     try {
-      await this.saveEpochs()
+      await this.reply(messageId, text)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`feishu: command reply for ${messageId} failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /**
+   * Render the chat's persisted session generations newest-first. Generation
+   * ids are pure functions of chat and epoch, so listing needs no side-car
+   * storage: only generations with a persisted snapshot are shown.
+   * @param chatId - chat whose generations are listed.
+   * @returns the reply text.
+   */
+  private async sessionListText(chatId: string): Promise<string> {
+    await this.loadGenerations()
+    const state = this.generations.get(chatId) ?? { current: 0, max: 0 }
+    const snapshots = await this.ctx.sessionPersistence.list()
+    const persisted = new Map(snapshots.map(snapshot => [snapshot.header.id as string, snapshot.header]))
+    const lines: string[] = []
+    for (let epoch = state.max; epoch >= Math.max(0, state.max - MAX_LISTED_GENERATIONS + 1); epoch--) {
+      const sessionId = sessionIdForChat(chatId, epoch)
+      const header = persisted.get(sessionId)
+      const current = epoch === state.current
+      // Every generation is listed so the count matches the rows: ones that
+      // never carried a message (a /new left behind unused) are marked 未使用.
+      const stamp = typeof header?.createdAt === 'number' ? `  ${formatGenerationTime(header.createdAt)}` : ''
+      const suffix = current
+        ? (header === undefined ? '（当前，新会话尚未开始）' : '（当前）')
+        : (header === undefined ? '（未使用）' : '')
+      lines.push(`${current ? '▶' : ' '} #${String(epoch)}  ${shortSessionId(sessionId)}${stamp}${suffix}`)
+    }
+    const total = state.max + 1
+    const heading = total > MAX_LISTED_GENERATIONS
+      ? `本会话群共有 ${String(total)} 个会话世代（显示最近 ${String(MAX_LISTED_GENERATIONS)} 个）：`
+      : `本会话群共有 ${String(total)} 个会话世代：`
+    return [heading, ...lines, '发送 /switch <序号> 切换。'].join('\n')
+  }
+
+  /**
+   * Move the chat's routing pointer to one earlier generation. The live handle
+   * is only unbound, never disposed; the next message resumes (or borrows) the
+   * target session through the ordinary ensureAgent path.
+   * @param chatId - chat whose pointer moves.
+   * @param argument - the raw generation argument from the command.
+   * @returns the reply text.
+   */
+  private async switchChat(chatId: string, argument: string | undefined): Promise<string> {
+    await this.loadGenerations()
+    // No entry means the chat never left the implicit generation 0.
+    const state = this.generations.get(chatId) ?? { current: 0, max: 0 }
+    // Tolerate angle brackets copied from the usage text (`/switch <1>`).
+    const raw = argument?.replace(/^<(\S+)>$/, '$1')
+    const target = raw === undefined || raw === '' ? Number.NaN : Number(raw)
+    if (!Number.isSafeInteger(target) || target < 0 || target > state.max) {
+      return `用法：/switch <序号>（0 到 ${String(state.max)}）。可先用 /sessions 查看列表。`
+    }
+    if (target === state.current) return `当前已在会话 #${String(target)}。`
+    this.handles.delete(chatId)
+    state.current = target
+    try {
+      await this.saveGenerations()
     } catch (error: unknown) {
       this.ctx.logger.warn(`feishu: persisting router state failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+    return `已切换到会话 #${String(target)}。下一条消息将进入该会话。`
+  }
+
+  /**
+   * Unbind one chat's live agent from its chat channel and open the next
+   * generation. The old agent stays alive in the agent registry and its
+   * persisted session stays on disk, so it keeps showing up in the Web UI and
+   * remains switchable; only the chat's routing pointer moves on.
+   * @param chatId - chat whose conversation is being reset.
+   * @returns the generation just opened.
+   */
+  private async resetChat(chatId: string): Promise<number> {
+    await this.loadGenerations()
+    this.handles.delete(chatId)
+    const state = this.generations.get(chatId) ?? { current: 0, max: 0 }
+    // New generations always extend the ceiling: after a /switch back to an
+    // old generation, current+1 would collide with an existing session id.
+    state.max += 1
+    state.current = state.max
+    this.generations.set(chatId, state)
+    try {
+      await this.saveGenerations()
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`feishu: persisting router state failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return state.current
   }
 
   /**
@@ -327,8 +453,9 @@ export class ConversationRouter {
     const cached = this.handles.get(chatId)
     if (cached !== undefined && this.ctx.agents.get(cached.agent.session.id) !== undefined) return cached
     this.handles.delete(chatId)
-    await this.loadEpochs()
-    const sessionId = sessionIdForChat(chatId, this.epochs.get(chatId) ?? 0)
+    await this.loadGenerations()
+    const epoch = this.generations.get(chatId)?.current ?? 0
+    const sessionId = sessionIdForChat(chatId, epoch)
     // Another surface (the Web UI viewing this chat's session) may already
     // hold the session's write claim with a live agent; borrowing it beats
     // failing the turn, since a second resume would collide on that claim.
@@ -344,7 +471,7 @@ export class ConversationRouter {
       .some(snapshot => snapshot.header.id === sessionId)
     const handle = persisted
       ? await this.resumeAgent(sessionId)
-      : await this.createAgent(sessionId, chatId)
+      : await this.createAgent(sessionId, chatId, epoch)
     this.handles.set(chatId, handle)
     return handle
   }
@@ -356,7 +483,7 @@ export class ConversationRouter {
   }
 
   /** Create the chat's first agent session. */
-  private async createAgent(sessionId: SessionId, chatId: string): Promise<AgentHandle> {
+  private async createAgent(sessionId: SessionId, chatId: string, epoch: number): Promise<AgentHandle> {
     const selection = this.ctx.agentDefaultModel.currentSelection()
     this.ctx.permissionPresets.resolve(this.options.permissionPreset)
     const preset = await this.ctx.agentPresets.resolve(this.options.agentPreset)
@@ -379,7 +506,7 @@ export class ConversationRouter {
       await workspace.attachSession(sessionId)
       attached = true
       this.ctx.permissionPresets.set(handle.agent.session, this.options.permissionPreset)
-      this.ctx.sessionTitle.rename(handle.agent.session, `Feishu chat ${chatId}`)
+      this.ctx.sessionTitle.rename(handle.agent.session, `Feishu chat ${chatId} #${String(epoch)}`)
       return handle
     } catch (error: unknown) {
       if (attached) {

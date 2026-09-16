@@ -60,9 +60,14 @@ Each admitted chat message is appended as one `user/message` whose source is `{ 
 <a id="chat-commands"></a>
 ## Chat commands
 
-One admitted message whose trimmed text is exactly `/new`, `/reset`, or `/新会话` moves the chat to a new session generation instead of reaching the agent: the router retires the chat's routing handle, increments the generation, persists it, and replies with the fixed notice `已开启新会话，此前的对话上下文已清空。`. The next ordinary message starts the new session, while the retired session keeps its persisted log and stays openable in the Web UI.
+One admitted message whose trimmed text is exactly `/new`, `/reset`, or `/新会话` moves the chat to a new session generation instead of reaching the agent: the router unbinds the chat's routing handle, advances the generation ceiling, persists it, and replies with a notice naming the new generation (`已开启新会话（#n）。…`). The next ordinary message starts the new session, while the retired session keeps its persisted log, stays openable in the Web UI, and remains switchable.
 
-Generations live in `feishu-router-state.json` under `$DSH_HOME` (default `~/.dsh`), loaded on first use and replaced atomically; a missing or unreadable file starts every chat at generation 0.
+Two more commands manage the generations, also never reaching the agent:
+
+- `/sessions` — lists every generation newest-first (generation number, short session id, creation time), marking the one currently routed; generations a `/new` left unused are marked 未使用; capped at the most recent 20. Angle brackets copied from the usage text (`/switch <1>`) parse the same as a bare number.
+- `/switch <n>` — moves the routing pointer to generation `n`; the next message resumes (or borrows) that session through the ordinary path. Out-of-range or malformed arguments answer with usage and change nothing.
+
+Generations live in `feishu-router-state.json` under `$DSH_HOME` (default `~/.dsh`) as `{chatId: {current, max}}`, loaded on first use and replaced atomically; a missing or unreadable file starts every chat at generation 0, and a legacy `{chatId: number}` file migrates to `{current: n, max: n}`. `/new` always opens `max + 1` — after a `/switch` back, `current + 1` would collide with an existing session id.
 
 ## Model Experience
 

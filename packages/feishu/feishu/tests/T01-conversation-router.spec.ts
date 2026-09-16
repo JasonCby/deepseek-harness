@@ -257,7 +257,7 @@ describe('ConversationRouter', () => {
     const first = followups.get(sessionId)?.mock.calls[0]?.[0]
     expect(first?.content[0]?.text).toContain('untrusted external input')
     expect((first?.content[0]?.text ?? '').endsWith('hello')).toBe(true)
-    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
+    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1 #0')
     expect(presets.set).toHaveBeenCalledWith(expect.anything(), 'read-only')
     expect(mountedPlugins).toContain('feishu-deliver-tool')
     expect(workspace.attachSession).toHaveBeenCalledWith(sessionId)
@@ -426,7 +426,7 @@ describe('ConversationRouter', () => {
     expect(disposes.get(firstSession)).not.toHaveBeenCalled()
     // A reset command never reaches the agent; it only moves the chat pointer on.
     r.accept(message({ messageId: 'om_2', text: '/new' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_2', '已开启新会话，此前的对话上下文已清空。') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_2', '已开启新会话（#1）。输入 /sessions 可查看历史会话，/switch <序号> 可切回。') })
     // The old agent stays alive (still listed in the Web UI), just unbound.
     expect(disposes.get(firstSession)).not.toHaveBeenCalled()
     expect(servedHandles.has(firstSession)).toBe(true)
