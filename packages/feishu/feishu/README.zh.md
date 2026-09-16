@@ -9,13 +9,14 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话映射到一个多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。
+`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书聊天按代际映射到一个多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 回发，随后是该轮声明的交付文件与交互卡片。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。
 
 ## 目录
 
 - [配置](#configuration)
 - [传输](#transports)
 - [服务 API](#service-api)
+- [聊天命令](#chat-commands)
 - [Model Experience](#model-experience)
 - [已知限制与后续工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -49,12 +50,19 @@ kind: "package-reference"
 <a id="service-api"></a>
 ## 服务 API
 
-- `sessionIdForChat(chatId)` — 确定性的 `feishu-<sha256(chatId)>` Session id；重启后以同一 id 恢复持久化会话，无需旁路映射存储。
+- `sessionIdForChat(chatId, epoch = 0)` — 确定性的 `feishu-<sha256(chatId#epoch)>` Session id，每个聊天代际一个；重启后以同一 id 恢复持久化会话，无需旁路映射存储，重置命令递增 `epoch` 让聊天在全新会话中继续。
 - `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复、从会话日志结算轮次。
 - `EdgeController` — 串行化边生命周期；`reconfigure()` 停掉活动边并按当前设置启动新边。
 - `larkSdk` — 收窄的 SDK 表面（`createApiClient`、`createWsClient`、`createDispatcher`、`generateChallenge`），测试可注入。
 
 每条获准的聊天消息追加为一条 `user/message`，source 为 `{ kind: 'feishu', chatId, messageId, form: 'notice', summary }`（声明合并进 `MessageSourceMap`）。
+
+<a id="chat-commands"></a>
+## 聊天命令
+
+一条获准消息的文本（去除首尾空白后）恰为 `/new`、`/reset` 或 `/新会话` 时，聊天切换到新的会话代际而不进入 agent：路由器弃用该聊天的路由句柄、递增代际、持久化，并回复固定提示 `已开启新会话，此前的对话上下文已清空。`。下一条普通消息开启新会话，而被弃用的会话保留其持久日志，在 Web UI 中仍可打开。
+
+代际存放于 `$DSH_HOME`（默认 `~/.dsh`）下的 `feishu-router-state.json`，首次使用时加载并以原子替换写入；文件缺失或不可读时，每个聊天从代际 0 开始。
 
 ## Model Experience
 
@@ -72,15 +80,15 @@ kind: "package-reference"
 
 只增不改：每条获准消息追加到对话。设置变更永不重写历史；传输热切换只触及边，不动会话日志。
 
-### 交付文件（`feishu_deliver`）
+### 交付文件与卡片（`feishu_deliver`）
 
 #### 模型可见内容
 
-工具 schema：一个必填的 `paths` 绝对路径数组。描述引导模型每轮只以最终交付物调用一次——绝不交付中间产物——并写明即时校验（存在、非空文件、低于飞书 30 MB 上限）。调用即答 `Delivery queue: <n> accepted (<names>), <m> rejected.`。轮次结算后，路由器从会话日志重放本轮的交付调用，把每个声明文件（`im/v1/files`，`stream` 类型）上传为独立文件消息；单个上传失败只记日志、绝不让轮次失败，每轮最多回传 20 个文件。
+工具 schema：可选的 `paths` 绝对路径数组，以及可选的 `cards` 飞书交互卡片 JSON 对象数组。描述引导模型每轮只以最终交付物调用一次——绝不交付中间产物——并写明即时校验（存在、非空文件、低于飞书 30 MB 上限；卡片对象需携带 `elements` 数组）。调用即答 `Delivery queue: <n> files accepted (<names>), <m> files rejected; <c> cards accepted, <d> cards rejected.`。轮次结算后，路由器从会话日志重放本轮的交付调用：每张去重后的声明卡片先以 `msg_type: 'interactive'` 消息回复，随后每个声明文件（`im/v1/files`，`stream` 类型）上传为独立文件消息。单张卡片或单次上传失败只记日志、绝不让轮次失败，每轮最多 20 张卡片加 20 个文件。
 
 #### Token 效应
 
-工具可见的每个请求承担固定 schema 成本；模型提交的路径保留在调用参数中直至压缩。交付本身只读持久日志，不耗模型 token。
+工具可见的每个请求承担固定 schema 成本；模型提交的路径与卡片保留在调用参数中直至压缩。交付本身只读持久日志，不耗模型 token。
 
 #### KV Cache 效应
 
@@ -96,6 +104,7 @@ kind: "package-reference"
 - **仅文本、图片与文件消息** — 其余聊天类型（语音、视频、表情包、消息卡片）在入口归一化处丢弃。图片以文件块抵达而非原生视觉：模型经文件工具读取，具备视觉能力的模型也不会原生看到图片字节。
 - **附件下载在轮次内且不重试** — 每个附件在其消息被处理时下载；下载或保存失败使整轮以失败提示收场，飞书侧消息资源上限 100 MB。
 - **交付依赖模型调用 `feishu_deliver`** — 轮次未声明的文件只留在工作区；单文件上限 30 MB（飞书消息上传限制），以可下载的文件消息送达，无图片内联预览。
+- **卡片校验止于 `elements` 数组** — 工具只拒绝完全不可能成为卡片的载荷，因此违反飞书卡片 schema 其余部分的卡片会被飞书 API 拒绝、记入日志并跳过，其余卡片与文件照常送达。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
 
@@ -105,6 +114,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)；卡片投递与聊天代际见 [Agent Note](../../../.agents/notes/implemented/feature/2026-09-16-feishu-interactive-cards-and-session-reset.zh.md)。
 
 </details>

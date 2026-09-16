@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md
-2026-09-08-feishu-bot-plugin.md: fd6fb2ab077f4ed22deda7b43842ce0acb7697cd
-2026-09-08-feishu-bot-plugin.zh.md: ac07d7f7a2f17df8f6395f57e0f6483dc3af6c24
+2026-09-08-feishu-bot-plugin.md: 19293be08902568b9b30149b37fa953687fae591
+2026-09-08-feishu-bot-plugin.zh.md: 8d648b6ec6b73e278a13834d1cc08f2e6fdd7f86
