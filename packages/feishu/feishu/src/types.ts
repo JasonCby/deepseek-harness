@@ -1,5 +1,10 @@
 /** Shared Feishu (Lark) chat-event types used by both transport edges. */
 
+import type { Branded } from '@deepseek-ai/dsh-brand'
+
+/** Identity of one pending interactive card awaiting its callback. */
+export type InteractionId = Branded<'FeishuInteractionId'>
+
 /** Chat channel the bot listens on, selected at edge start. */
 export type FeishuTransport = 'websocket' | 'webhook'
 

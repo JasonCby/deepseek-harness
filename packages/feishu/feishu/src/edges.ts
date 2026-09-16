@@ -6,17 +6,40 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
+import type { CardAction, CardActionResponse } from './interaction.ts'
+import { parseCardAction } from './interaction.ts'
 import { createFileReplySender, createReplySender, type FileReplySender, type ReplySender } from './reply.ts'
 import { createReactionSender, type ReactionSender } from './reaction.ts'
 import { createTopicOpener, type TopicOpener } from './topic.ts'
 import { createResourceFetcher, type ResourceFetcher } from './resource.ts'
 import type { ConversationRouter } from './conversation.ts'
 import type { FeishuSettings } from './config.ts'
+import type { InteractionBridge } from './interaction.ts'
 
 /** The event type this package handles. */
 const MESSAGE_EVENT_TYPE = 'im.message.receive_v1'
+/** The card-action callback type, delivered as one event frame on the long connection. */
+const CARD_ACTION_EVENT_TYPE = 'card.action.trigger'
 /** Sentinel a registered handler returns so a verified delivery is distinguishable from a rejected one. */
 const HANDLER_OK = 'ok'
+
+/**
+ * The card-action dispatch step both ingress paths share: validate one
+ * callback body, resolve the interaction it matches, and answer with the
+ * response that refreshes the card. The HTTP route wraps it in the SDK's
+ * card handler; the long-connection dispatcher returns it straight, and the
+ * SDK relays the return value to the platform either way.
+ * @param dispatch - resolves one admitted card action into its refresh response.
+ * @returns the handler both ingress paths register.
+ */
+function cardActionHandler(dispatch: (action: CardAction) => CardActionResponse): (data: unknown) => CardActionResponse {
+  return (data) => {
+    const action = parseCardAction(data)
+    // A malformed body still answers successfully: an empty response keeps
+    // the card unchanged instead of failing a click the platform retried.
+    return action === undefined ? {} : dispatch(action)
+  }
+}
 
 /** One running transport edge: teardown plus the senders its credentials serve. */
 export interface TransportEdge {
@@ -87,11 +110,15 @@ function registerMessageHandler(router: ConversationRouter, dispatcher: ReturnTy
 /**
  * Start the outbound long-connection edge. The SDK owns heartbeat and
  * reconnect; disposal closes the client without touching its reconnect loop.
+ * Card callbacks configured for long-connection delivery arrive here as
+ * `card.action.trigger` event frames; the handler's return value is relayed
+ * to the platform as the callback response, so the card refreshes in place.
  * @param ctx - plugin context for lifecycle logging.
  * @param sdk - the Lark SDK construction surface.
  * @param settings - the currently authoritative settings section.
  * @param credentials - resolved app credentials.
  * @param router - the conversation router events feed into.
+ * @param dispatch - resolves one admitted card action into its refresh response.
  * @returns the edge; stop closes the connection.
  */
 export function startWebsocketEdge(
@@ -100,9 +127,11 @@ export function startWebsocketEdge(
   settings: FeishuSettings,
   credentials: AppCredentials,
   router: ConversationRouter,
+  dispatch: (action: CardAction) => CardActionResponse,
 ): TransportEdge {
   const dispatcher = sdk.createDispatcher({})
   registerMessageHandler(router, dispatcher)
+  dispatcher.register({ [CARD_ACTION_EVENT_TYPE]: cardActionHandler(dispatch) })
   const client = sdk.createWsClient({
     appId: credentials.appId,
     appSecret: credentials.appSecret,
@@ -282,14 +311,56 @@ export async function startWebhookEdge(
 }
 
 /**
+ * Serialized swap engine for one lifecycle-managed resource: `reconfigure`
+ * runs builds one at a time, each build returning the stop handle of the
+ * resource it started, and `dispose` stops the active handle; a build a
+ * disposed engine still awaited stops its own result.
+ */
+class SwapEngine {
+  private current: (() => void) | undefined
+  private chain: Promise<void> = Promise.resolve()
+  private disposed = false
+
+  /**
+   * @param ctx - plugin context for lifecycle logging.
+   * @param label - the resource name failure logs carry.
+   */
+  constructor(private readonly ctx: Context, private readonly label: string) {}
+
+  /** Swap the active resource for one `build` produces. */
+  reconfigure(build: () => Promise<() => void>): void {
+    if (this.disposed) return
+    this.chain = this.chain
+      .then(async () => {
+        this.current?.()
+        this.current = undefined
+        const stop = await build()
+        if (this.disposed) {
+          stop()
+          return
+        }
+        this.current = stop
+      })
+      .catch((error: unknown) => {
+        this.ctx.logger.error(`feishu: ${this.label} failed to start: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
+
+  /** Stop the active resource; a swap already in flight stops its own result. */
+  dispose(): void {
+    this.disposed = true
+    this.current?.()
+    this.current = undefined
+  }
+}
+
+/**
  * Owns the single active transport edge. Settings commits call
  * {@link EdgeController.reconfigure}; edge starts are serialized so a rapid
  * settings change never leaves two edges live.
  */
 export class EdgeController {
-  private current: TransportEdge | undefined
-  private chain: Promise<void> = Promise.resolve()
-  private disposed = false
+  private readonly swaps: SwapEngine
 
   /**
    * @param ctx - plugin context for lifecycle logging.
@@ -297,6 +368,7 @@ export class EdgeController {
    * @param router - the conversation router edges feed and reply through.
    * @param settings - thunk returning the currently authoritative settings section.
    * @param webServer - thunk returning the optionally composed WebServer registrar.
+   * @param interactions - the bridge whose interaction cards reply through the active edge.
    */
   constructor(
     private readonly ctx: Context,
@@ -304,50 +376,165 @@ export class EdgeController {
     private readonly router: ConversationRouter,
     private readonly settings: () => FeishuSettings,
     private readonly webServer: () => WebServerRouteRegistrar | undefined,
-  ) {}
+    private readonly interactions: InteractionBridge,
+  ) {
+    this.swaps = new SwapEngine(ctx, 'transport edge')
+  }
 
   /** Swap the active edge for one built from the current settings. */
   reconfigure(): void {
-    if (this.disposed) return
-    this.chain = this.chain
-      .then(() => this.swap())
-      .catch((error: unknown) => {
-        this.ctx.logger.error(`feishu: transport edge failed to start: ${error instanceof Error ? error.message : String(error)}`)
-      })
+    this.swaps.reconfigure(async () => {
+      const settings = this.settings()
+      if (settings.transport === 'webhook') {
+        const edge = await startWebhookEdge(this.ctx, this.sdk, settings, this.webServer(), this.router)
+        this.activate(edge)
+        return () => {
+          edge.stop()
+        }
+      }
+      const credentials = await resolveAppCredentials(this.ctx, settings)
+      const edge = startWebsocketEdge(this.ctx, this.sdk, settings, credentials, this.router, action => this.interactions.dispatch(action))
+      this.activate(edge)
+      return () => {
+        edge.stop()
+      }
+    })
   }
 
   /** Stop the active edge; a swap already in flight stops its own result. */
   dispose(): void {
-    this.disposed = true
-    this.current?.stop()
-    this.current = undefined
-  }
-
-  private async swap(): Promise<void> {
-    const previous = this.current
-    this.current = undefined
-    previous?.stop()
-    const settings = this.settings()
-    if (settings.transport === 'webhook') {
-      const edge = await startWebhookEdge(this.ctx, this.sdk, settings, this.webServer(), this.router)
-      if (this.disposed) {
-        edge.stop()
-        return
-      }
-      this.activate(edge)
-      return
-    }
-    const credentials = await resolveAppCredentials(this.ctx, settings)
-    if (this.disposed) return
-    this.activate(startWebsocketEdge(this.ctx, this.sdk, settings, credentials, this.router))
+    this.swaps.dispose()
   }
 
   private activate(edge: TransportEdge): void {
-    this.current = edge
     this.router.setReplySender(edge.reply)
     this.router.setReactionSender(edge.reactions)
     this.router.setTopicOpener(edge.topics)
     this.router.setFileReplySender(edge.replyFile)
     this.router.setResourceFetcher(edge.fetchResource)
+    this.interactions.setReplySender(edge.reply)
+  }
+}
+
+/** One running card-callback edge: the route serving interactive cards' actions. */
+export interface CardCallbackEdge {
+  stop(): void
+}
+
+/**
+ * Start the card-action callback edge: one exact route under the webhook
+ * path answering Feishu's card callback verification and dispatching
+ * verified actions. This route serves deployments whose Feishu console
+ * posts card callbacks to a request address; the long-connection console
+ * mode delivers them over the websocket edge instead.
+ * @param ctx - plugin context carrying the credentials seam.
+ * @param sdk - the Lark SDK construction surface.
+ * @param settings - the currently authoritative settings section.
+ * @param webServer - the composed WebServer registrar.
+ * @param dispatch - resolves one admitted action and returns the response that refreshes the card.
+ * @returns the edge; stop unregisters the route.
+ */
+export async function startCardCallbackEdge(
+  ctx: Context,
+  sdk: LarkSdk,
+  settings: FeishuSettings,
+  webServer: WebServerRouteRegistrar,
+  dispatch: (action: CardAction) => CardActionResponse,
+): Promise<CardCallbackEdge> {
+  const verificationToken = (await ctx.credentials.resolve(credentialRef(settings.verificationTokenEnv)))?.value ?? ''
+  const encryptKey = (await ctx.credentials.resolve(credentialRef(settings.encryptKeyEnv)))?.value ?? ''
+  const handler = sdk.createCardActionHandler({ verificationToken, encryptKey }, cardActionHandler(dispatch))
+  const route: WebRoute = {
+    kind: 'exact',
+    path: `${settings.path}/card`,
+    handler: async (request, response) => {
+      try {
+        const body = await requireJsonPostBody(request, settings.maxBodyBytes)
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(body)
+        } catch {
+          throw new WebhookHttpError(400, 'request body is not valid JSON')
+        }
+        // The SDK handler reads signature headers off the payload's prototype,
+        // mirroring the event dispatcher's webhook contract.
+        const data: unknown = Object.assign(Object.create({ headers: request.headers }), parsed)
+        try {
+          const { isChallenge, challenge } = sdk.generateChallenge(data, encryptKey)
+          if (isChallenge) {
+            respond(response, 200, JSON.stringify(challenge), 'application/json')
+            return
+          }
+        } catch {
+          throw new WebhookHttpError(400, 'challenge cannot be decrypted without an encrypt key')
+        }
+        const result = await handler.invoke(data)
+        if (result === undefined) {
+          // invoke returns undefined when signature verification rejected the body.
+          throw new WebhookHttpError(401, 'card action verification failed')
+        }
+        respond(response, 200, JSON.stringify(result), 'application/json')
+      } catch (error: unknown) {
+        if (error instanceof WebhookHttpError) {
+          if (error.status === 405) response.setHeader('allow', 'POST')
+          respond(response, error.status, error.message)
+          return
+        }
+        ctx.logger.warn('feishu: card callback request failed')
+        respond(response, 503, 'feishu card callback ingress is unavailable')
+      }
+    },
+  }
+  return { stop: webServer.register(route) }
+}
+
+/**
+ * Owns the card-callback route. Settings commits and credential updates call
+ * {@link CardCallbackController.reconfigure}; registrations are serialized
+ * after the transport edge swaps so a rapid change never leaves two routes.
+ */
+export class CardCallbackController {
+  private readonly swaps: SwapEngine
+
+  /**
+   * @param ctx - plugin context for lifecycle logging.
+   * @param sdk - the Lark SDK construction surface.
+   * @param settings - thunk returning the currently authoritative settings section.
+   * @param webServer - thunk returning the composed WebServer registrar.
+   * @param dispatch - resolves one admitted card action into its refresh response.
+   */
+  constructor(
+    private readonly ctx: Context,
+    private readonly sdk: LarkSdk,
+    private readonly settings: () => FeishuSettings,
+    private readonly webServer: () => WebServerRouteRegistrar | undefined,
+    private readonly dispatch: (action: CardAction) => CardActionResponse,
+  ) {
+    this.swaps = new SwapEngine(ctx, 'card callback route')
+  }
+
+  /** Rebuild the route from the current settings; disabled settings unregister it. */
+  reconfigure(): void {
+    this.swaps.reconfigure(async () => {
+      const settings = this.settings()
+      if (!settings.interactionCards.enabled) return () => {}
+      const webServer = this.webServer()
+      // Card callbacks configured for long-connection delivery never touch
+      // this route; without a WebServer only that console mode works, and
+      // the warn names the missing piece for an HTTP-mode deployment.
+      if (webServer === undefined) {
+        this.ctx.logger.warn('feishu: no webServer composed; interactive cards serve long-connection card callbacks only')
+        return () => {}
+      }
+      const edge = await startCardCallbackEdge(this.ctx, this.sdk, settings, webServer, this.dispatch)
+      return () => {
+        edge.stop()
+      }
+    })
+  }
+
+  /** Stop the active route; a swap already in flight stops its own result. */
+  dispose(): void {
+    this.swaps.dispose()
   }
 }

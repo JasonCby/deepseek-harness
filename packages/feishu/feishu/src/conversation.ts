@@ -23,6 +23,7 @@ import type { ReactionSender } from './reaction.ts'
 import type { OpenedTopic, TopicOpener } from './topic.ts'
 import { topicSummary } from './topic.ts'
 import type { ResourceFetcher } from './resource.ts'
+import type { InteractionBridge } from './interaction.ts'
 import { extractDeliverables, extractReplyText, resolveReplyForm } from './settlement.ts'
 import { truncateReply } from './reply.ts'
 import type { FeishuSettings, Config } from './config.ts'
@@ -105,6 +106,7 @@ export class ConversationRouter {
   private topics: TopicOpener = unreachableTopics
   private replyFile: FileReplySender
   private fetchResource: ResourceFetcher
+  private interactions: InteractionBridge | undefined
 
   /**
    * @param ctx - plugin context owning every chat agent.
@@ -189,6 +191,15 @@ export class ConversationRouter {
    */
   setFileReplySender(sender: FileReplySender): void {
     this.replyFile = sender
+  }
+
+  /**
+   * Attach the interaction bridge whose cards answer in-turn approval and
+   * question requests of this router's conversations.
+   * @param bridge - the plugin-scoped interaction bridge.
+   */
+  setInteractionBridge(bridge: InteractionBridge): void {
+    this.interactions = bridge
   }
 
   /** Whether one chat message passes the live allowlist and mention gates. */
@@ -315,6 +326,8 @@ export class ConversationRouter {
     const replyTo = topic?.leadMessageId ?? message.messageId
     try {
       const handle = await this.ensureAgent(routed)
+      const sessionId = sessionKeyFor(routed.chatId, routed.threadId)
+      this.interactions?.setAnchor(sessionId, replyTo)
       const fromSeq = handle.agent.session.seq
       const attachments = await this.saveAttachments(routed)
       const followupContent: ContentBlock[] = [
@@ -355,6 +368,7 @@ export class ConversationRouter {
         this.ctx.logger.warn(`feishu: failure notice for ${message.messageId} was not delivered: ${noticeError instanceof Error ? noticeError.message : String(noticeError)}`)
       }
     } finally {
+      this.interactions?.clearAnchor(sessionKeyFor(routed.chatId, routed.threadId))
       await this.clearThinking(message.messageId, reactionId)
     }
   }
@@ -414,8 +428,10 @@ export class ConversationRouter {
     this.handles.delete(sessionId)
     const live = this.ctx.agents.get(sessionId)
     if (live !== undefined) {
-      // An adopted agent's setup ran elsewhere, so its deliver tool mounts here.
+      // An adopted agent's setup ran elsewhere, so its deliver tool and the
+      // interaction answerers mount here; the agent's own scope disposes them.
       await live.ctx.plugin(feishuDeliverTool)
+      this.interactions?.mountAnswerers(live.ctx, live)
       const adopted = { agent: live }
       this.handles.set(sessionId, adopted)
       return adopted
@@ -450,8 +466,9 @@ export class ConversationRouter {
         model: selection.model,
         ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
       },
-      setup: async (agentCtx) => {
+      setup: async (agentCtx, agent) => {
         await this.mount(agentCtx, preset.id)
+        this.interactions?.mountAnswerers(agentCtx, agent)
       },
     })
     let attached = false
@@ -496,6 +513,7 @@ export class ConversationRouter {
         // mount exactly it so replayed history stays actionable.
         const logged = agent.session.header.agentPreset
         await this.mount(agentCtx, logged ?? presetId)
+        this.interactions?.mountAnswerers(agentCtx, agent)
       },
     })
   }

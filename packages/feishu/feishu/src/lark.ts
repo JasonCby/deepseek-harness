@@ -2,7 +2,7 @@
 
 import type { Readable } from 'node:stream'
 import type { ReadStream } from 'node:fs'
-import { Client, Domain, EventDispatcher, LoggerLevel, WSClient, generateChallenge as sdkGenerateChallenge } from '@larksuiteoapi/node-sdk'
+import { CardActionHandler, Client, Domain, EventDispatcher, LoggerLevel, WSClient, generateChallenge as sdkGenerateChallenge } from '@larksuiteoapi/node-sdk'
 
 /** Outcome of one outbound Feishu API call; the SDK resolves instead of throwing on API errors. */
 export interface LarkResponse {
@@ -117,6 +117,17 @@ export interface LarkWsClient {
   close(params?: { force?: boolean }): void
 }
 
+/** Lark SDK `CardActionHandler`: one verified card-action callback invocation. */
+export interface LarkCardActionHandler {
+  /**
+   * Validate, decrypt, and dispatch one card-action callback body; the
+   * registered handler's return value resolves as the callback response.
+   * @param data - parsed request body carrying request headers on its prototype.
+   * @returns the handler's response, or undefined when verification rejected the body.
+   */
+  invoke(data: unknown): Promise<unknown>
+}
+
 /** Construction surface of the Lark SDK, injectable so tests never touch the network. */
 export interface LarkSdk {
   /**
@@ -137,6 +148,16 @@ export interface LarkSdk {
    * @returns the dispatcher.
    */
   createDispatcher(params: { verificationToken?: string; encryptKey?: string }): LarkDispatcher
+  /**
+   * Create a card-action handler for the HTTP card callback route.
+   * @param params - callback verification credentials.
+   * @param handler - receives the decrypted callback body; its return value is the response.
+   * @returns the invocable handler.
+   */
+  createCardActionHandler(
+    params: { verificationToken?: string; encryptKey?: string },
+    handler: (data: unknown) => unknown,
+  ): LarkCardActionHandler
   /**
    * Answer one `url_verification` request.
    * @param data - parsed request body.
@@ -174,6 +195,11 @@ export const larkSdk: LarkSdk = {
     encryptKey: encryptKey ?? '',
     loggerLevel,
   }),
+  createCardActionHandler: ({ verificationToken, encryptKey }, handler) => new CardActionHandler({
+    verificationToken: verificationToken ?? '',
+    encryptKey: encryptKey ?? '',
+    loggerLevel,
+  }, handler),
   generateChallenge: (data, encryptKey) => {
     if (data === null || typeof data !== 'object') return { isChallenge: false, challenge: { challenge: undefined } }
     // generateChallenge throws when the body is encrypted but the key is missing;

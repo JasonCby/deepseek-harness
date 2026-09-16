@@ -36,6 +36,11 @@ function settings(): Mutable<FeishuSettings> {
     failureNotice: 'processing failed',
     dedupCapacity: 64,
     cardTemplates: [],
+    interactionCards: {
+      enabled: false,
+      approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
+      question: { title: 'Please answer', submitLabel: 'Submit' },
+    },
   }
 }
 

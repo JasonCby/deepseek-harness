@@ -20,7 +20,7 @@ let root: string | undefined
 let context: Context | undefined
 
 /** Compose one real WebServer plus the plugin over stubbed core services. */
-async function compose(): Promise<void> {
+async function compose(options: { interactionCards?: boolean } = {}): Promise<void> {
   root = await mkdtemp(join(tmpdir(), 'dsh-feishu-loader-'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
@@ -38,6 +38,7 @@ async function compose(): Promise<void> {
     '    workspacePath: /tmp/dsh-feishu-loader-workspace',
     '    agentPreset: standard',
     '    permissionPreset: read-only',
+    ...options.interactionCards === true ? ['    interactionCards:', '      enabled: true'] : [],
     '',
   ].join('\n'))
 
@@ -185,5 +186,37 @@ describe('real Loader composition', () => {
     expect(followups[0]!.sourceKind).toBe('feishu')
     expect(followups[0]!.prompt).toContain('untrusted external input')
     expect(followups[0]!.prompt.endsWith('hello from loader')).toBe(true)
+  })
+})
+
+/** One `card.action.trigger` v2 event body. */
+function cardActionBody(): string {
+  return JSON.stringify({
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger' },
+    event: {
+      operator: { open_id: 'ou_loader' },
+      action: { tag: 'button', value: { interactionId: 'fi-loader-none', outcome: 'approved' } },
+    },
+  })
+}
+
+describe('real Loader composition with interactive cards', () => {
+  it('serves card-action callbacks on the card route through the real SDK handler', { timeout: 60_000 }, async () => {
+    await compose({ interactionCards: true })
+    const port = (context!.get('webServer') as unknown as { port: number }).port
+
+    const action = await fetch(`http://127.0.0.1:${String(port)}/feishu/card`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: cardActionBody(),
+    })
+    expect(action.status).toBe(200)
+    // No pending interaction matches the fixture identity, so the callback
+    // answers with the stale toast and leaves the card unchanged.
+    await expect(action.json()).resolves.toEqual({ toast: { type: 'info', content: 'This interaction has already been settled.' } })
+
+    const wrongMethod = await fetch(`http://127.0.0.1:${String(port)}/feishu/card`, { method: 'GET' })
+    expect(wrongMethod.status).toBe(405)
   })
 })
