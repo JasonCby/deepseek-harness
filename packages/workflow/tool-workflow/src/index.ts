@@ -267,6 +267,15 @@ export function apply(ctx: Context, config: Config): void {
         type: 'text',
         text: renderResult(args.meta.name, value.agentsStarted, value.result, maxResultChars),
       }],
+      presentationMeta: (args, value) => {
+        // The same configured bound that caps the rendered text caps the
+        // persisted result; an oversized result is omitted whole rather than
+        // truncated, because a cut JSON document would read as present-but-wrong.
+        const identity = { runId: value.runId, name: args.meta.name }
+        return JSON.stringify(value.result).length > maxResultChars
+          ? identity
+          : { ...identity, result: value.result }
+      },
     },
     async execute(args, exec) {
       const parent = exec.agent

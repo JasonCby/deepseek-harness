@@ -83,7 +83,7 @@ export function message(overrides: Partial<InboundMessage> = {}): InboundMessage
 export interface E2EHarness {
   ctx: Context
   subject: ConversationRouter
-  reply: Mock<(messageId: string, text: string) => Promise<void>>
+  reply: Mock<(messageId: string, content: { kind: string; text: string }) => Promise<void>>
   replyFile: Mock<(messageId: string, file: { name: string; path: string }) => Promise<void>>
   /** The workspace every session's cwd resolves to; drill fixtures live here. */
   workdir: string
@@ -124,7 +124,7 @@ export async function mountE2E(workdir: string): Promise<E2EHarness> {
     resolve: vi.fn(async (ref: string) => ref === 'GLM_API_KEY' ? { value: glmKey } : undefined),
   })
 
-  const reply = vi.fn(async (_messageId: string, _text: string) => {})
+  const reply = vi.fn(async (_messageId: string, _content: { kind: string; text: string }) => {})
   const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
   const fetchResource = vi.fn(
     async (_messageId: string, _attachment: InboundAttachment): Promise<AsyncIterable<Uint8Array>> => {

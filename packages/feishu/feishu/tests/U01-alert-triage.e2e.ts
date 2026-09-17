@@ -61,7 +61,7 @@ describe.skipIf(glmKeyFromCredentialStore() === undefined)('U01 Harness发起交
     expect(report).toContain('王悦')
 
     // 飞书文本回复同样给出正确结论
-    const replyText = harness.reply.mock.calls[0]?.[1] ?? ''
+    const replyText = harness.reply.mock.calls[0]?.[1]?.text ?? ''
     expect(replyText).toContain('prod-order-api')
     expect(replyText).not.toBe('processing failed')
   }, 240_000)

@@ -51,8 +51,8 @@ export function message(overrides: Partial<InboundMessage> = {}): InboundMessage
   }
 }
 
-/** The reply sender the router resolves turns into. */
-export const reply = vi.fn(async (_messageId: string, _text: string) => {})
+/** The reply sender the router resolves turns into; content carries the PR card-reply form ({ kind: 'text', text }). */
+export const reply = vi.fn(async (_messageId: string, _content: { kind: string; text: string }) => {})
 
 /** The file reply sender the router delivers declared files through. */
 export const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})

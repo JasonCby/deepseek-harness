@@ -35,7 +35,7 @@ describe('U07 出站失败', () => {
     // 第一次调用是回合文本（失败），第二次是失败通知：错误可见而非被吞
     const second = reply.mock.calls[1]
     expect(second?.[0]).toBe('om_1')
-    expect(second?.[1]).toBe('processing failed')
+    expect(second?.[1]).toEqual({ kind: 'text', text: 'processing failed' })
     expect(followups.get(sessionId)).toHaveBeenCalledOnce()
   })
 
@@ -85,7 +85,7 @@ describe('U07 出站失败', () => {
     // 上传失败留下一次可见的尝试记录；不重试出第二次上传
     expect(replyFile).toHaveBeenCalledTimes(1)
     // 回合文本照常发出（含模型措辞），但文件失败从未被包装成成功通知
-    expect(reply).toHaveBeenCalledWith('om_1', '文件已投递。')
+    expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: '文件已投递。' })
     expect(reply).toHaveBeenCalledTimes(1)
   })
 })

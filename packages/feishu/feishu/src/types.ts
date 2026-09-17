@@ -1,7 +1,18 @@
 /** Shared Feishu (Lark) chat-event types used by both transport edges. */
 
+import type { Branded } from '@deepseek-ai/dsh-brand'
+
+/** Identity of one pending interactive card awaiting its callback. */
+export type InteractionId = Branded<'FeishuInteractionId'>
+
 /** Chat channel the bot listens on, selected at edge start. */
 export type FeishuTransport = 'websocket' | 'webhook'
+
+/** Reply form one settled turn takes: plain text, a single markdown card, or per-turn classification. */
+export type ReplyForm = 'text' | 'card' | 'auto'
+
+/** Reply form after `auto` has been resolved against one settled turn. */
+export type ResolvedReplyForm = 'text' | 'card'
 
 /** One downloadable media attachment an inbound message carries. */
 export interface InboundAttachment {
@@ -23,6 +34,8 @@ export interface InboundMessage {
   readonly messageId: string
   /** Chat the message arrived in; the conversation routing key. */
   readonly chatId: string
+  /** Topic thread the message belongs to (`omt_`-prefixed), when the event carries one. */
+  readonly threadId?: string
   /** `p2p` for direct chats, `group` for group chats. */
   readonly chatType: string
   /** Sender `open_id`, when the event carries one. */

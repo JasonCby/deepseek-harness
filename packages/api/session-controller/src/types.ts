@@ -223,6 +223,8 @@ export interface SkillListRequest {
 
 /** One skill available to the Session's human-facing composer. */
 export interface SkillEntry {
+  /** Absolute SKILL.md path when supplied by a filesystem provider. */
+  readonly path?: string
   /** Kebab-case identifier referenced as `/name`. */
   readonly name: string
   /** Short routing description. */
@@ -358,6 +360,8 @@ export interface SessionCancelValue {
 
 /** Request to open one path prepared by a Session-aware caller on the Host desktop. */
 export interface SessionOpenWorkspacePathRequest {
+  /** File-manager navigation when requested; omission uses the default application. */
+  readonly action?: 'reveal'
   /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
   readonly path: string
 }

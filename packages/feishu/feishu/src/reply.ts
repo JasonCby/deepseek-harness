@@ -1,10 +1,42 @@
 /** Outbound replies: the write paths back to Feishu. */
 
 import { createReadStream } from 'node:fs'
+import { assertNever } from '@deepseek-ai/dsh-util-values'
+import type { FeishuCard } from './card.ts'
+import type { TemplateReplyPayload } from './template.ts'
 import type { LarkApiClient } from './lark.ts'
 
-/** Sends one text reply to the chat a message arrived in. */
-export type ReplySender = (messageId: string, text: string) => Promise<void>
+/** One outbound reply payload: settled text, a markdown card, or a templated card. */
+export type ReplyContent =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'card'; readonly card: FeishuCard }
+  | TemplateReplyPayload
+
+/** Sends one reply to the chat a message arrived in. */
+export type ReplySender = (messageId: string, content: ReplyContent) => Promise<void>
+
+/**
+ * Encode one reply payload as the wire form the reply API accepts.
+ * @param content - the payload to encode.
+ * @returns the `msg_type` plus serialized `content` the API call carries.
+ */
+function wirePayload(content: ReplyContent): { msg_type: 'text' | 'interactive'; content: string } {
+  switch (content.kind) {
+    case 'text':
+      return { msg_type: 'text', content: JSON.stringify({ text: content.text }) }
+    case 'card':
+      return { msg_type: 'interactive', content: JSON.stringify(content.card) }
+    case 'template':
+      return {
+        msg_type: 'interactive',
+        content: JSON.stringify({ type: 'template', data: { template_id: content.templateId, template_variable: content.variables } }),
+      }
+    case 'localCard':
+      return { msg_type: 'interactive', content: JSON.stringify(content.card) }
+    default:
+      return assertNever(content)
+  }
+}
 
 /** Sends one file reply to the chat a message arrived in. */
 export type FileReplySender = (messageId: string, file: { name: string; path: string }) => Promise<void>
@@ -16,10 +48,10 @@ export type FileReplySender = (messageId: string, file: { name: string; path: st
  * @throws when Feishu rejects the reply (non-zero response code).
  */
 export function createReplySender(client: LarkApiClient): ReplySender {
-  return async (messageId, text) => {
+  return async (messageId, content) => {
     const response = await client.im.v1.message.reply({
       path: { message_id: messageId },
-      data: { msg_type: 'text', content: JSON.stringify({ text }) },
+      data: wirePayload(content),
     })
     if (response.code !== undefined && response.code !== 0) {
       throw new Error(`feishu reply failed with code ${String(response.code)}: ${response.msg ?? 'no message'}`)

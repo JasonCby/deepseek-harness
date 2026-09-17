@@ -34,7 +34,7 @@ const TRANSPORTS = ['websocket', 'webhook'] as const
 /** Domain shorthands the plugin's settings accept besides a self-hosted origin. */
 const DOMAIN_SHORTHANDS = ['feishu', 'lark'] as const
 
-/** The feishu fields this card edits. */
+/** The feishu section as this card reads it: the fields it edits plus the credential reference it addresses. */
 export interface FeishuSettings {
   /** Ingress transport: outbound long connection or inbound webhook route. */
   transport?: string

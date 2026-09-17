@@ -37,7 +37,7 @@ describe('T11 工具失败', () => {
       text: '',
       attachments: [{ kind: 'file', key: 'file_v3_x', name: 'alert.png' }],
     }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' }) })
 
     // 停止依赖错误信息：未写入存储、未提交模型（ensureAgent 先于下载执行，spy 存在但未被调用）
     expect(saveFileStream).not.toHaveBeenCalled()
@@ -52,7 +52,7 @@ describe('T11 工具失败', () => {
       text: '',
       attachments: [{ kind: 'image', key: 'img_v3_y' }],
     }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' }) })
     expect(followups.get(sessionIdForChat('oc_1'))).not.toHaveBeenCalled()
   })
 

@@ -10,8 +10,10 @@
         domain: feishu
         workspacePath: !!js process.env.DSH_FEISHU_WORKSPACE ?? process.cwd()
         agentPreset: standard
-        permissionPreset: read-only
-        allowChatIds: []
+        permissionPreset: workspace-write
+        replyInThread: true
+        interactionCards:
+          enabled: true
 
 # Webhook transport alternative: mount a dedicated isolated WebServer so the
 # public ingress never exposes the UI API, then switch the section's transport

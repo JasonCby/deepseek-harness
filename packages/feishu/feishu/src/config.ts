@@ -1,7 +1,9 @@
 /** Plugin configuration and the UI-editable settings section derived from it. */
 
 import z from '@deepseek-ai/schemastery'
-import type { FeishuTransport } from './types.ts'
+import type { CardTemplateEntry, TemplateVariableRule } from './template.ts'
+import { resolveCardFormat } from './template.ts'
+import type { FeishuTransport, ReplyForm } from './types.ts'
 
 /** Default credential reference naming the Feishu app id. */
 export const DEFAULT_APP_ID_ENV = 'DSH_FEISHU_APP_ID'
@@ -44,12 +46,62 @@ export interface FeishuSettings {
   readonly allowChatIds: string[]
   /** In groups, answer only messages whose mention list is non-empty. */
   readonly groupRequireMention: boolean
+  /** Open one topic per main-stream message and answer inside it; topic messages always continue their topic. */
+  readonly replyInThread: boolean
   /** Reply texts longer than this are truncated with an ellipsis marker. */
   readonly replyCharLimit: number
+  /** Form settled replies take: plain text or a single markdown card. */
+  readonly replyForm: ReplyForm
+  /** Card header title when {@link FeishuSettings.replyForm} is `card`. */
+  readonly cardTitle: string
+  /** Builder multilingual key lifted to `elements`/`header` when a template card is a builder export. */
+  readonly cardLocale: string
+  /** Emoji key bracketing admitted turns as the thinking indicator; empty disables the indicator. */
+  readonly thinkingEmoji: string
   /** Text replied when message processing fails before a reply exists. */
   readonly failureNotice: string
   /** Maximum remembered message identities for retry deduplication. */
   readonly dedupCapacity: number
+  /** Card templates bound to the tool turns whose replies render them. */
+  readonly cardTemplates: CardTemplateEntry[]
+  /** Interactive approval and question cards, their callbacks, and their settled refreshes. */
+  readonly interactionCards: InteractionCardsSettings
+}
+
+/** Style knobs of the interactive approval confirm cards. */
+export interface ApprovalCardsSettings {
+  /** Local card JSON 1.0 frame carrying `{{toolName}}`/`{{reason}}` placeholders; the button row is appended. */
+  readonly pendingCard?: unknown
+  /** Local card JSON 1.0 frame carrying `{{outcome}}`/`{{decidedBy}}` placeholders for the callback refresh. */
+  readonly settledCard?: unknown
+  /** Platform template the callback refresh updates the card with, instead of a local settled frame. */
+  readonly settledTemplateId?: string
+  /** Approve button label. */
+  readonly approveLabel: string
+  /** Reject button label. */
+  readonly rejectLabel: string
+}
+
+/** Style knobs of the interactive ask-user form cards. */
+export interface QuestionCardsSettings {
+  /** Form card header title. */
+  readonly title: string
+  /** Form submit button label. */
+  readonly submitLabel: string
+  /** Local card JSON 1.0 frame carrying `{{outcome}}`/`{{decidedBy}}`/`{{summary}}` placeholders for the callback refresh. */
+  readonly settledCard?: unknown
+  /** Platform template the callback refresh updates the card with, instead of a local settled frame. */
+  readonly settledTemplateId?: string
+}
+
+/** Interactive cards answering in-turn approval and user-question requests. */
+export interface InteractionCardsSettings {
+  /** Whether the bridge claims those requests with cards; disabled passes them to other channels. */
+  readonly enabled: boolean
+  /** Approval confirm card knobs. */
+  readonly approval: ApprovalCardsSettings
+  /** Ask-user form card knobs. */
+  readonly question: QuestionCardsSettings
 }
 
 /** Full plugin configuration: the settings section plus deployment-only fields. */
@@ -61,6 +113,44 @@ export interface Config extends FeishuSettings {
   /** Sandbox and approval preset applied to each chat session. */
   readonly permissionPreset: string
 }
+
+const templateVariable: z<TemplateVariableRule> = z.object({
+  from: z.union(['context', 'tool-result'] as const),
+  key: z.string(),
+  path: z.string(),
+  required: z.boolean().default(false),
+  maxLength: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+})
+
+const cardTemplate: z<CardTemplateEntry> = z.object({
+  name: z.string(),
+  bindTool: z.string(),
+  workflowName: z.string(),
+  templateId: z.string(),
+  card: z.any(),
+  variables: z.dict(templateVariable),
+})
+
+const approvalCards: z<ApprovalCardsSettings> = z.object({
+  pendingCard: z.any(),
+  settledCard: z.any(),
+  settledTemplateId: z.string(),
+  approveLabel: z.string().default('Approve'),
+  rejectLabel: z.string().default('Reject'),
+})
+
+const questionCards: z<QuestionCardsSettings> = z.object({
+  title: z.string().default('Please answer'),
+  submitLabel: z.string().default('Submit'),
+  settledCard: z.any(),
+  settledTemplateId: z.string(),
+})
+
+const interactionCards: z<InteractionCardsSettings> = z.object({
+  enabled: z.boolean().default(false),
+  approval: approvalCards.default({ approveLabel: 'Approve', rejectLabel: 'Reject' }),
+  question: questionCards.default({ title: 'Please answer', submitLabel: 'Submit' }),
+})
 
 const settingsFields = {
   transport: z.union(['websocket', 'webhook'] as const).default('websocket'),
@@ -75,9 +165,16 @@ const settingsFields = {
   maxBodyBytes: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(65536),
   allowChatIds: z.array(z.string()).default([]),
   groupRequireMention: z.boolean().default(true),
+  replyInThread: z.boolean().default(false),
   replyCharLimit: z.number().step(1).min(200).default(4000),
+  replyForm: z.union(['text', 'card', 'auto'] as const).default('auto'),
+  cardTitle: z.string().default('DSH'),
+  cardLocale: z.string().default('zh_cn'),
+  thinkingEmoji: z.string().default('Typing'),
   failureNotice: z.string().default('Sorry, something went wrong while handling this message.'),
   dedupCapacity: z.number().step(1).min(16).default(1024),
+  cardTemplates: z.array(cardTemplate).default([]),
+  interactionCards,
 }
 
 /** Schema of the UI-editable settings section (namespace {@link FEISHU_SETTINGS_NAMESPACE}). */
@@ -106,9 +203,16 @@ export function settingsEntryOf(config: Config): FeishuSettings {
     maxBodyBytes: config.maxBodyBytes,
     allowChatIds: config.allowChatIds,
     groupRequireMention: config.groupRequireMention,
+    replyInThread: config.replyInThread,
     replyCharLimit: config.replyCharLimit,
+    replyForm: config.replyForm,
+    cardTitle: config.cardTitle,
+    cardLocale: config.cardLocale,
+    thinkingEmoji: config.thinkingEmoji,
     failureNotice: config.failureNotice,
     dedupCapacity: config.dedupCapacity,
+    cardTemplates: config.cardTemplates,
+    interactionCards: config.interactionCards,
   }
 }
 
@@ -130,8 +234,70 @@ export function assertSettings(value: FeishuSettings): void {
   if (value.failureNotice.trim() === '') {
     throw new Error('feishu failureNotice must be non-empty')
   }
+  if (value.cardTitle.trim() === '') {
+    throw new Error('feishu cardTitle must be non-empty')
+  }
+  if (value.cardLocale.trim() === '' || value.cardLocale !== value.cardLocale.trim()) {
+    throw new Error('feishu cardLocale must be a non-empty trimmed builder multilingual key')
+  }
+  if (value.thinkingEmoji.trim() !== value.thinkingEmoji) {
+    throw new Error('feishu thinkingEmoji must be a trimmed emoji key; use an empty string to disable the thinking indicator')
+  }
   if (value.allowChatIds.some(id => id.trim() !== id || id === '')) {
     throw new Error('feishu allowChatIds entries must be non-empty trimmed strings')
+  }
+  const templateNames = new Set<string>()
+  for (const template of value.cardTemplates) {
+    if (template.name.trim() === '' || templateNames.has(template.name)) {
+      throw new Error('feishu cardTemplates names must be non-empty and unique')
+    }
+    templateNames.add(template.name)
+    if (template.bindTool.trim() === '') {
+      throw new Error(`feishu cardTemplates entry "${template.name}" needs a non-empty bindTool`)
+    }
+    const hasTemplateId = template.templateId !== undefined && template.templateId !== ''
+    if (hasTemplateId === (template.card !== undefined)) {
+      throw new Error(`feishu cardTemplates entry "${template.name}" must carry exactly one of templateId or card`)
+    }
+    if (!hasTemplateId) {
+      // Shape authority lives with the render pipeline: this accepts canonical
+      // card JSON 1.0 and the builder's multilingual export, and rejects card
+      // JSON 2.0 by name as long as no 'v2' dialect joins CardInputFormat.
+      resolveCardFormat(template.card, value.cardLocale, `feishu cardTemplates entry "${template.name}" card`)
+    }
+    for (const [variable, rule] of Object.entries(template.variables)) {
+      if (rule.from === 'context' && !['chatId', 'senderOpenId', 'threadId'].includes(rule.key ?? '')) {
+        throw new Error(`feishu cardTemplates entry "${template.name}" variable "${variable}" needs a context key of chatId, senderOpenId, or threadId`)
+      }
+      if (rule.from === 'tool-result' && (rule.path ?? '').trim() === '') {
+        throw new Error(`feishu cardTemplates entry "${template.name}" variable "${variable}" needs a non-empty tool-result path`)
+      }
+    }
+  }
+  const cards = value.interactionCards
+  if (cards.approval.approveLabel.trim() === '' || cards.approval.rejectLabel.trim() === '') {
+    throw new Error('feishu interactionCards approval labels must be non-empty')
+  }
+  if (cards.question.title.trim() === '' || cards.question.submitLabel.trim() === '') {
+    throw new Error('feishu interactionCards question title and submit label must be non-empty')
+  }
+  // A pending card must be a local document: the builder appends the buttons
+  // carrying the interaction identity, which a platform template cannot host.
+  if (cards.approval.pendingCard !== undefined) {
+    resolveCardFormat(cards.approval.pendingCard, value.cardLocale, 'feishu interactionCards approval pendingCard')
+  }
+  assertSettledStyle('approval', cards.approval.settledCard, cards.approval.settledTemplateId, value.cardLocale)
+  assertSettledStyle('question', cards.question.settledCard, cards.question.settledTemplateId, value.cardLocale)
+}
+
+/** Validate one interaction kind's settled style: never both a local card and a platform template. */
+function assertSettledStyle(kind: 'approval' | 'question', card: unknown, templateId: string | undefined, locale: string): void {
+  const hasTemplate = templateId !== undefined && templateId !== ''
+  if (hasTemplate && card !== undefined) {
+    throw new Error(`feishu interactionCards ${kind} settled style must carry at most one of settledCard or settledTemplateId`)
+  }
+  if (!hasTemplate && card !== undefined) {
+    resolveCardFormat(card, locale, `feishu interactionCards ${kind} settledCard`)
   }
 }
 

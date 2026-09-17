@@ -28,7 +28,7 @@ describe('T02 模型不可用降级', () => {
       throw new Error('model request timed out after 30000ms')
     })
     router(ctx, settings()).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'processing failed' }) })
     await new Promise((resolve) => { setTimeout(resolve, 30) })
 
     // 不误关单：无文件投递、无成功文本
@@ -53,11 +53,11 @@ describe('T02 模型不可用降级', () => {
 
     const subject = router(ctx, settings())
     subject.accept(message({ messageId: 'om_alert_1' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_alert_1', 'processing failed') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_alert_1', { kind: 'text', text: 'processing failed' }) })
 
     broken = false
     subject.accept(message({ messageId: 'om_alert_2' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_alert_2', '研判完成：CPU 告警已确认。') })
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_alert_2', { kind: 'text', text: '研判完成：CPU 告警已确认。' }) })
     // 会话存活且两条告警都留痕：人工可在原会话补处理
     expect(followups.get(sessionId)).toHaveBeenCalledTimes(2)
   })

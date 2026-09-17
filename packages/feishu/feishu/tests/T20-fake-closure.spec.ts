@@ -42,7 +42,9 @@ describe('T20 闭环伪成功', () => {
     await new Promise((resolve) => { setTimeout(resolve, 30) })
 
     // 文本回复照发（含模型的声称），但投递以 tool/call 声明为准：没有任何文件消息
-    expect(reply).toHaveBeenCalledWith('om_1', expect.stringContaining('已完成'))
+    const claimed = reply.mock.calls[0]?.[1]
+    expect(claimed?.kind).toBe('text')
+    expect(claimed?.text).toContain('已完成')
     expect(replyFile).not.toHaveBeenCalled()
   })
 
@@ -87,7 +89,7 @@ describe('T20 闭环伪成功', () => {
 
     // 投递尝试失败被记录且隔离：回合以文本正常结束，不误报失败通知，也不谎称文件已送达
     expect(replyFile).toHaveBeenCalledTimes(1)
-    expect(reply).toHaveBeenCalledWith('om_1', '处理完成。')
+    expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: '处理完成。' })
     expect(reply).toHaveBeenCalledTimes(1)
   })
 })

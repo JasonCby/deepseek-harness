@@ -77,7 +77,7 @@ describe.skipIf(glmKeyFromCredentialStore() === undefined)('T01 正常闭环 (re
 
     // 每轮回复都不是失败通知
     for (const call of harness.reply.mock.calls) {
-      expect(call[1]).not.toBe('processing failed')
+      expect(call[1]?.text).not.toBe('processing failed')
     }
   }, 600_000)
 })

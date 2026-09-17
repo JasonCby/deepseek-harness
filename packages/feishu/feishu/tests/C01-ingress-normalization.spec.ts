@@ -19,6 +19,14 @@ function messagePayload(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 describe('normalizeEventData', () => {
+  it('carries the topic identity when the event has one', () => {
+    const base = messagePayload()
+    const message = base.message as Record<string, unknown>
+    const withTopic = normalizeEventData({ ...base, message: { ...message, thread_id: 'omt_1' } })
+    expect(withTopic?.threadId).toBe('omt_1')
+    expect(normalizeEventData(base)?.threadId).toBeUndefined()
+  })
+
   it('normalizes one text message', () => {
     expect(normalizeEventData(messagePayload())).toEqual({
       messageId: 'om_1',

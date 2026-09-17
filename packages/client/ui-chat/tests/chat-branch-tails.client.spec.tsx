@@ -64,7 +64,9 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
         }
         : node,
   }
-  const props = { node: viewNode, t: translate, renderMessageImages, useChat: useDetachedChat } as ChatNodeViewProps
+  const props = {
+    node: viewNode, t: translate, renderMessageImages, openFile: vi.fn(), openSkill: vi.fn(), useChat: useDetachedChat,
+  } as unknown as ChatNodeViewProps
   switch (node.kind) {
     case 'user':
     case 'steering':
@@ -1085,6 +1087,10 @@ describe('user file attachments', () => {
     expect(view.getByTitle('notes.pdf').textContent).toContain('3.2MB')
     expect(view.getByTitle('tiny.txt').textContent).toContain('12B')
     expect(view.getByTitle('mid.csv').textContent).toContain('500KB')
+    const icons = ['notes.pdf', 'tiny.txt', 'mid.csv'].map(name =>
+      view.getByTitle(name).querySelector('svg')?.innerHTML,
+    )
+    expect(new Set(icons).size).toBe(icons.length)
     expect(view.getByText('summarize these')).toBeTruthy()
   })
 })
