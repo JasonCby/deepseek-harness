@@ -1,4 +1,4 @@
-/** U04: turn settlement extraction — reply text and deliverable declarations from the session log. */
+/** C04: turn settlement extraction — reply text and deliverable declarations from the session log. */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { DELIVER_TOOL_NAME } from '../src/deliver.ts'

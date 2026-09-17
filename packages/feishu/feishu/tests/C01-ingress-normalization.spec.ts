@@ -1,4 +1,4 @@
-/** U01: inbound event normalization — text, mentions, media attachments, malformed shapes. */
+/** C01: inbound event normalization — text, mentions, media attachments, malformed shapes. */
 
 import { normalizeEventData } from '../src/ingress.ts'
 import { describe, expect, it } from 'vitest'

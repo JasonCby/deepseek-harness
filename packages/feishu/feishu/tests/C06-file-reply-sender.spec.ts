@@ -1,4 +1,4 @@
-/** U06: file reply sender — upload once, reply with the returned key, fail loud without one. */
+/** C06: file reply sender — upload once, reply with the returned key, fail loud without one. */
 
 import type { ReadStream } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'

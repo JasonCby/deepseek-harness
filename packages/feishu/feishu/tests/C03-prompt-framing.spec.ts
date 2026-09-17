@@ -1,4 +1,4 @@
-/** U03: chat prompt framing — untrusted-input provenance, mention stripping, attachment listing. */
+/** C03: chat prompt framing — untrusted-input provenance, mention stripping, attachment listing. */
 
 import { frameChatPrompt, stripMentionPlaceholders } from '../src/prompt.ts'
 import { describe, expect, it } from 'vitest'

@@ -1,4 +1,4 @@
-/** U09: settings and composition config validation — domains, paths, notices, allowlists, credential refs. */
+/** C09: settings and composition config validation — domains, paths, notices, allowlists, credential refs. */
 
 import { assertConfig, assertSettings, credentialRefsOf, type FeishuSettings } from '../src/config.ts'
 import { describe, expect, it } from 'vitest'

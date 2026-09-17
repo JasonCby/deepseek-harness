@@ -1,4 +1,4 @@
-/** U07: reply truncation against the configured character ceiling. */
+/** C07: reply truncation against the configured character ceiling. */
 
 import { truncateReply } from '../src/reply.ts'
 import { describe, expect, it } from 'vitest'

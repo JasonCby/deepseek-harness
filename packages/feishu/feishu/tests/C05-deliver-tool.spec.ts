@@ -1,4 +1,4 @@
-/** U05: the feishu_deliver tool — registration and path validation (exists, non-empty, size). */
+/** C05: the feishu_deliver tool — registration and path validation (exists, non-empty, size). */
 
 import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

@@ -1,4 +1,4 @@
-/** U08: deterministic chat-to-session identity mapping. */
+/** C08: deterministic chat-to-session identity mapping. */
 
 import { sessionIdForChat } from '../src/conversation.ts'
 import { describe, expect, it } from 'vitest'

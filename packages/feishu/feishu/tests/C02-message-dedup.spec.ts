@@ -1,4 +1,4 @@
-/** U02: transport retry deduplication — one claim per message identity, bounded capacity. */
+/** C02: transport retry deduplication — one claim per message identity, bounded capacity. */
 
 import { MessageDedup } from '../src/dedup.ts'
 import { describe, expect, it } from 'vitest'

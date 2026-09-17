@@ -1,4 +1,4 @@
-/** T03: real Loader composition: WebServer + plugin on the webhook transport, driven over real HTTP. */
+/** C12: real Loader composition: WebServer + plugin on the webhook transport, driven over real HTTP. */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
