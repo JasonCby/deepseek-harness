@@ -29,9 +29,20 @@ function settings(): Mutable<FeishuSettings> {
     maxBodyBytes: 65536,
     allowChatIds: [],
     groupRequireMention: true,
+    replyInThread: false,
     replyCharLimit: 4000,
+    replyForm: 'text',
+    cardTitle: 'DSH',
+    cardLocale: 'zh_cn',
+    thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
+    cardTemplates: [],
+    interactionCards: {
+      enabled: false,
+      approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
+      question: { title: 'Please answer', submitLabel: 'Submit' },
+    },
   }
 }
 
@@ -50,7 +61,7 @@ function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 /** The single reply sender the router resolves turns into. */
-const reply = vi.fn(async (_messageId: string, _text: string) => {})
+const reply = vi.fn(async (_messageId: string, _content: { kind: string; text?: string }) => {})
 
 /** The single file reply sender the router delivers declared files through. */
 const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})

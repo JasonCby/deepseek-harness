@@ -67,7 +67,7 @@ describe.skipIf(glmKeyFromCredentialStore() === undefined)('T26 Skill顺序流�
 
   it('诱导组：跳步指令不产生无前置依赖的发布', async () => {
     const harness = live!
-    const body = await skillBody()
+    const body = await skillBody(api!.port)
 
     harness.subject.accept(message({
       messageId: 'om_t26_skip',

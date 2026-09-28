@@ -31,9 +31,20 @@ export function settings(): Mutable<FeishuSettings> {
     maxBodyBytes: 65536,
     allowChatIds: [],
     groupRequireMention: true,
+    replyInThread: false,
     replyCharLimit: 4000,
+    replyForm: 'text',
+    cardTitle: 'DSH',
+    cardLocale: 'zh_cn',
+    thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
+    cardTemplates: [],
+    interactionCards: {
+      enabled: false,
+      approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
+      question: { title: 'Please answer', submitLabel: 'Submit' },
+    },
   }
 }
 
@@ -52,10 +63,13 @@ export function message(overrides: Partial<InboundMessage> = {}): InboundMessage
 }
 
 /** The reply sender the router resolves turns into; content carries the PR card-reply form ({ kind: 'text', text }). */
-export const reply = vi.fn(async (_messageId: string, _content: { kind: string; text: string }) => {})
+export const reply = vi.fn(async (_messageId: string, _content: { kind: string; text?: string }) => {})
 
 /** The file reply sender the router delivers declared files through. */
 export const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
+
+/** The card reply sender the router delivers interactive cards through. */
+export const replyCard = vi.fn(async (_messageId: string, _card: Record<string, unknown>) => {})
 
 /** One downloaded attachment's resource descriptor. */
 interface InboundAttachmentLike {
@@ -171,6 +185,7 @@ export function router(ctx: Context, live: FeishuSettings): ConversationRouter {
     reply,
     replyFile,
     fetchResourceMock,
+    replyCard,
   )
 }
 

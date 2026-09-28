@@ -6,7 +6,7 @@
  * @module skill-e2e-harness
  */
 
-import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentId, FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -148,6 +148,7 @@ export async function mountSkillE2E(workdir: string): Promise<SkillE2EHarness> {
 
   const reply = vi.fn(async (_messageId: string, _content: { kind: string; text?: string }) => {})
   const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
+  const replyCard = vi.fn(async (_messageId: string, _card: Record<string, unknown>) => {})
   const fetchResource = vi.fn(async (): Promise<AsyncIterable<Uint8Array>> => {
     throw new Error('attachments are not part of the skill cases')
   })
@@ -173,7 +174,7 @@ export async function mountSkillE2E(workdir: string): Promise<SkillE2EHarness> {
   })
   ctx.provide('attachments', {
     saveFileStream: vi.fn(async ({ name }: { data: AsyncIterable<Uint8Array>; name: string }): Promise<FileAttachmentRef> => ({
-      attachmentId: brandString(`att_${name}`),
+      attachmentId: brandString<AttachmentId>(`att_${name}`),
       name,
       bytes: 0,
     })),
@@ -186,6 +187,7 @@ export async function mountSkillE2E(workdir: string): Promise<SkillE2EHarness> {
     reply,
     replyFile,
     fetchResource,
+    replyCard,
   )
 
   return {

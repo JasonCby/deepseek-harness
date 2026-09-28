@@ -48,6 +48,6 @@ describe('T04 同对象新告警', () => {
     // 同资产(同chat)的全部事件落在同一 session 上，业务侧可据此关联展示
     expect(servedHandles.size).toBe(1)
     expect(servedHandles.has(sessionId)).toBe(true)
-    expect((servedHandles.get(sessionId)?.agent.session.snapshotEvents() as { type: string }[]).filter(e => e.type === 'user/message').length).toBe(2)
+    expect(servedHandles.get(sessionId)?.agent.session.snapshotEvents().filter(e => e.type === 'user/message')).toHaveLength(2)
   })
 })

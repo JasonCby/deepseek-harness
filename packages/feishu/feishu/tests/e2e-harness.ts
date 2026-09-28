@@ -59,9 +59,20 @@ export function settings(): FeishuSettings {
     maxBodyBytes: 65536,
     allowChatIds: [],
     groupRequireMention: true,
+    replyInThread: false,
     replyCharLimit: 4000,
+    replyForm: 'text',
+    cardTitle: 'DSH',
+    cardLocale: 'zh_cn',
+    thinkingEmoji: 'Typing',
     failureNotice: 'processing failed',
     dedupCapacity: 64,
+    cardTemplates: [],
+    interactionCards: {
+      enabled: false,
+      approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
+      question: { title: 'Please answer', submitLabel: 'Submit' },
+    },
   }
 }
 
@@ -88,7 +99,7 @@ export interface E2EHarness {
   /** The workspace every session's cwd resolves to; drill fixtures live here. */
   workdir: string
   /** Ordered session events of the chat's live agent, for tool-call evidence. */
-  events(): SessionEvent[]
+  events(): readonly SessionEvent[]
   /** Wait until the router settled `count` replies (one per finished turn). */
   settled(count: number): Promise<void>
 }
@@ -124,8 +135,9 @@ export async function mountE2E(workdir: string): Promise<E2EHarness> {
     resolve: vi.fn(async (ref: string) => ref === 'GLM_API_KEY' ? { value: glmKey } : undefined),
   })
 
-  const reply = vi.fn(async (_messageId: string, _content: { kind: string; text: string }) => {})
+  const reply = vi.fn(async (_messageId: string, _content: { kind: string; text?: string }) => {})
   const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
+  const replyCard = vi.fn(async (_messageId: string, _card: Record<string, unknown>) => {})
   const fetchResource = vi.fn(
     async (_messageId: string, _attachment: InboundAttachment): Promise<AsyncIterable<Uint8Array>> => {
       throw new Error('attachments are not part of these positive-path cases')
@@ -169,6 +181,7 @@ export async function mountE2E(workdir: string): Promise<E2EHarness> {
     reply,
     replyFile,
     fetchResource,
+    replyCard,
   )
 
   return {

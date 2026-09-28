@@ -116,7 +116,7 @@ export const workspace = {
 
 /** Follow-up spies per session id, keyed like the router's handle map. */
 export const followups = new Map<string, Mock<(message: FollowupMessage) => void>>()
-export const disposes = new Map<string, ReturnType<typeof vi.fn>>()
+export const disposes = new Map<string, Mock<() => Promise<void>>>()
 /** WhenIdle behavior hooks per handle; default appends one assistant reply. */
 export const whenIdleBehaviors = new Map<string, (events: SessionEvent[]) => Promise<void>>()
 

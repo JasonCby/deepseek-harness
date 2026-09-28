@@ -279,7 +279,7 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => {
       const settled = reply.mock.calls.at(-1)?.[1]
       expect(settled?.kind).toBe('text')
-      expect(settled?.text).toContain('answer')
+      expect(settled?.kind === 'text' ? settled.text : '').toContain('answer')
     })
     const firstSession = sessionIdForChat('oc_1', 0)
     expect(disposes.get(firstSession)).not.toHaveBeenCalled()

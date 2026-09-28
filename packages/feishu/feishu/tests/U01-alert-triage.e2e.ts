@@ -44,7 +44,7 @@ describe.skipIf(glmKeyFromCredentialStore() === undefined)('U01 Harness发起交
     const calls = harness.events().filter(event => event.type === 'tool/call')
     const readTargets = calls
       .map(event => event.type === 'tool/call' ? event.data : undefined)
-      .filter(data => data !== undefined && data.name === 'read')
+      .filter((data): data is NonNullable<typeof data> => data !== undefined && data.name === 'read')
       .map(data => String((JSON.parse(data.arguments) as Record<string, unknown>).file_path))
     for (const fixture of ['active_alerts.json', 'asset_inventory.csv', 'runbook.md']) {
       expect(readTargets.some(path => path.includes(fixture)), `read 覆盖 ${fixture}`).toBe(true)
