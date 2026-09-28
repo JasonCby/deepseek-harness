@@ -97,6 +97,39 @@ export function extractDeliverables(events: readonly SessionEvent[], fromSeq: nu
 }
 
 /**
+ * Normalize one declared card onto the send form Feishu accepts: plain-string
+ * `header`/`header.title` values become the `plain_text` title object card
+ * JSON 1.0 requires, and unsalvageable documents (card JSON 2.0, junk
+ * headers no normalization can save) yield undefined so the caller skips them.
+ * The declared card is never mutated: the session log owns the original.
+ * @param card - the declared card document, already accepted by isCardPayload.
+ * @returns the normalized card, or undefined when no normalization can save it.
+ */
+export function normalizeCardForSend(card: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (card['schema'] === '2.0' || card['body'] !== undefined) return undefined
+  const normalized: Record<string, unknown> = structuredClone(card)
+  const header = normalized['header']
+  if (header === undefined) return normalized
+  if (typeof header === 'string') {
+    normalized['header'] = { title: { tag: 'plain_text', content: header } }
+    return normalized
+  }
+  if (header === null || typeof header !== 'object' || Array.isArray(header)) {
+    delete normalized['header']
+    return normalized
+  }
+  const record = header as Record<string, unknown>
+  const title = record['title']
+  if (title === undefined) return normalized
+  if (typeof title === 'string') {
+    record['title'] = { tag: 'plain_text', content: title }
+  } else if (title === null || typeof title !== 'object' || Array.isArray(title)) {
+    delete record['title']
+  }
+  return normalized
+}
+
+/**
  * Collect the interactive cards the turn declared through the deliver tool,
  * in declaration order with exact-duplicate payloads removed.
  * @param events - the session's ordered event log.
@@ -115,10 +148,12 @@ export function extractCards(events: readonly SessionEvent[], fromSeq: number): 
     if (!Array.isArray(declared)) continue
     for (const card of declared) {
       if (!isCardPayload(card)) continue
-      const fingerprint = JSON.stringify(card)
+      const normalized = normalizeCardForSend(card)
+      if (normalized === undefined) continue
+      const fingerprint = JSON.stringify(normalized)
       if (seen.has(fingerprint)) continue
       seen.add(fingerprint)
-      cards.push(card)
+      cards.push(normalized)
     }
   }
   return cards

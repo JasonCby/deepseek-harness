@@ -19,6 +19,28 @@ function isCardPayload(value: unknown): value is Record<string, unknown> {
   return Array.isArray((value as Record<string, unknown>).elements)
 }
 
+/**
+ * Why one declared card cannot become a sendable Feishu card; undefined means
+ * accepted. Plain-string `header`/`header.title` pass: settlement normalizes
+ * them onto the plain_text title object card JSON 1.0 requires.
+ * @param card - the declared card document.
+ * @returns the rejection reason, or undefined when the card is sendable.
+ */
+function cardRejection(card: unknown): string | undefined {
+  if (!isCardPayload(card)) return 'must be a card JSON object with a non-empty "elements" array'
+  const header = card['header']
+  if (header === undefined || typeof header === 'string') return undefined
+  if (header === null || typeof header !== 'object' || Array.isArray(header)) {
+    return '"header" must be an object or a plain title string'
+  }
+  const title = (header as Record<string, unknown>)['title']
+  if (title !== undefined && title !== null && typeof title !== 'string'
+    && (typeof title !== 'object' || Array.isArray(title))) {
+    return '"header.title" must be a {tag, content} object or a plain string'
+  }
+  return undefined
+}
+
 /** The tool name the settlement scan matches. */
 export const DELIVER_TOOL_NAME = 'feishu_deliver'
 
@@ -93,6 +115,11 @@ export function apply(ctx: Context): void {
             type: 'integer',
             required: true,
           },
+          rejectedCardReasons: {
+            type: 'array',
+            required: true,
+            items: { type: 'string' },
+          },
         },
       },
       render: (_args, value) => [{
@@ -100,7 +127,8 @@ export function apply(ctx: Context): void {
         text: `Delivery queue: ${String(value.accepted.length)} files accepted `
           + `(${value.accepted.map(file => file.name).join(', ') || 'none'}), `
           + `${String(value.rejected.length)} files rejected; `
-          + `${String(value.acceptedCards)} cards accepted, ${String(value.rejectedCards)} cards rejected.`,
+          + `${String(value.acceptedCards)} cards accepted, ${String(value.rejectedCards)} cards rejected`
+          + (value.rejectedCardReasons.length === 0 ? '' : ` (${value.rejectedCardReasons.join('; ')})`),
       }],
     },
     async execute(args) {
@@ -131,14 +159,17 @@ export function apply(ctx: Context): void {
       }
       let acceptedCards = 0
       let rejectedCards = 0
+      const rejectedCardReasons: string[] = []
       for (const card of cards) {
-        if (isCardPayload(card)) {
+        const rejection = cardRejection(card)
+        if (rejection === undefined) {
           acceptedCards += 1
         } else {
           rejectedCards += 1
+          rejectedCardReasons.push(rejection)
         }
       }
-      return { accepted, rejected, acceptedCards, rejectedCards }
+      return { accepted, rejected, acceptedCards, rejectedCards, rejectedCardReasons }
     },
     presentCall: args => ({ card: 'generic', title: 'Deliver files to Feishu', kind: 'other', rawInput: args.paths }),
   }))

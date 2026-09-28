@@ -181,7 +181,9 @@ describe('real Loader composition', () => {
     })
     expect(retry.status).toBe(200)
 
-    expect(createdSessionIds.length).toBe(1)
+    // Webhook admission settles asynchronously; the dedup invariant stays "exactly one
+    // session", so waiting for 1 still fails when a retry created a second one.
+    await vi.waitFor(() => { expect(createdSessionIds.length).toBe(1) })
     await vi.waitFor(() => { expect(followups.length).toBe(1) })
     expect(followups[0]!.sourceKind).toBe('feishu')
     expect(followups[0]!.prompt).toContain('untrusted external input')
