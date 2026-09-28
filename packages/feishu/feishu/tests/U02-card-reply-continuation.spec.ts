@@ -1,7 +1,7 @@
 /**
- * U02 (POC 用例「卡片回复续接」, 王悦): 用户在卡片上补充识别信息 → 受理进入原事件会话并更新原绑定卡片；
- * 兼覆盖 U03 (多轮补充) 的表单多问题投影与结构化应答。
- * Builders, callback parsing, settings validation, and the bridge's waterfall answers.
+ * U02 (POC 用例「卡片回复续接」, 王悦): 用户在卡片上补充识别信息 → 受理进入原事件会话并更新原绑定卡片。
+ * U03 (多轮补充) 的表单用例在其专属 spec 中。Builders, callback parsing,
+ * settings validation, and the bridge's waterfall answers.
  */
 
 import { Context } from '@deepseek-ai/cordis'

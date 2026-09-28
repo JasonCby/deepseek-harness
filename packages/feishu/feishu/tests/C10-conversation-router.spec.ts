@@ -1,260 +1,43 @@
-/** C10: ConversationRouter behavior tests over a real Cordis Context with stubbed core services. Carries T14/T24 behaviors. */
+/** C10: ConversationRouter behavior tests over a real Cordis Context with stubbed core services. */
 
-import type { AttachmentId, FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { AgentHandle } from '@deepseek-ai/dsh-agent'
-import { Context } from '@deepseek-ai/cordis'
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { ConversationRouter, sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sessionIdForChat } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
-import type { ReplyContent } from '../src/reply.ts'
-import type { InboundAttachment, InboundMessage } from '../src/types.ts'
+import {
+  buildHandle,
+  disposes,
+  externalAgents,
+  fetchResourceMock,
+  followups,
+  isolateHome,
+  message,
+  mountedPlugins,
+  mountedPresets,
+  persistence,
+  reply,
+  replyCard,
+  replyFile,
+  resetC10,
+  restoreHome,
+  router,
+  saveFileStream,
+  servedHandles,
+  settings,
+  stubbedContext,
+  whenIdleBehaviors,
+  workspace,
+} from './c10-stubs.ts'
 
-/** Every field of a settings section, writable for live-edit tests. */
-type Mutable<T> = { -readonly [K in keyof T]: T[K] }
-
-/** One mutable settings section the router reads live. */
-function settings(): Mutable<FeishuSettings> {
-  return {
-    transport: 'websocket',
-    domain: 'feishu',
-    appIdEnv: 'DSH_FEISHU_APP_ID',
-    appSecretEnv: 'DSH_FEISHU_APP_SECRET',
-    verificationTokenEnv: 'DSH_FEISHU_VERIFICATION_TOKEN',
-    encryptKeyEnv: 'DSH_FEISHU_ENCRYPT_KEY',
-    path: '/feishu',
-    maxBodyBytes: 65536,
-    allowChatIds: [],
-    groupRequireMention: true,
-    replyInThread: false,
-    replyCharLimit: 4000,
-    replyForm: 'text',
-    cardTitle: 'DSH',
-    cardLocale: 'zh_cn',
-    thinkingEmoji: 'Typing',
-    failureNotice: 'processing failed',
-    dedupCapacity: 64,
-    cardTemplates: [],
-    interactionCards: {
-      enabled: false,
-      approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
-    },
-  }
-}
-
-/** One inbound chat message. */
-function message(overrides: Partial<InboundMessage> = {}): InboundMessage {
-  return {
-    messageId: 'om_1',
-    chatId: 'oc_1',
-    chatType: 'p2p',
-    senderOpenId: 'ou_1',
-    text: 'hello',
-    attachments: [],
-    mentioned: false,
-    ...overrides,
-  }
-}
-
-/** The single reply sender the router resolves turns into. */
-const reply = vi.fn(async (_messageId: string, _content: ReplyContent) => {})
-
-/** The single file reply sender the router delivers declared files through. */
-const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
-
-/** The single card reply sender the router delivers declared cards through. */
-const replyCard = vi.fn(async (_messageId: string, _card: Record<string, unknown>) => {})
-
-/** The resource fetcher the router downloads attachments through. */
-const fetchResourceMock = vi.fn(
-  async (_messageId: string, _attachment: InboundAttachment): Promise<AsyncIterable<Uint8Array>> => attachmentBytes(),
-)
-
-/** One downloaded attachment's byte stream. */
-async function* attachmentBytes(): AsyncIterable<Uint8Array> {
-  yield Uint8Array.of(1, 2, 3)
-}
-
-/** The attachment store's saveFileStream stub, echoing a durable ref per name. */
-const saveFileStream = vi.fn(async ({ name }: { data: AsyncIterable<Uint8Array>; name: string }): Promise<FileAttachmentRef> => ({
-  attachmentId: brandString<AttachmentId>(`att_${name}`),
-  name,
-  bytes: 3,
-}))
-
-/** Handles the stub agent registry served, keyed by session id. */
-const servedHandles = new Map<string, AgentHandle>()
-/** Live agents registered by another surface (the Web UI), keyed by session id. */
-const externalAgents = new Map<string, unknown>()
-/** Session headers the stub persistence lists. */
-let persistedHeaders: { header: { id: string } }[] = []
-
-let contexts: Context[] = []
-
-/** Build one context whose core services are behavioral stubs. */
-function stubbedContext(): Context {
-  const ctx = new Context()
-  contexts.push(ctx)
-  ctx.provide('agents', {
-    create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (agentCtx: unknown, agent: unknown) => Promise<void> }) => {
-      const handle = buildHandle(sessionId)
-      if (setup !== undefined) await setup(agentCtxStub(), handle.agent)
-      servedHandles.set(sessionId, handle)
-      return handle
-    }),
-    resume: vi.fn(async ({ resumeSessionId, setup }: {
-      resumeSessionId: string
-      setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
-    }) => {
-      const handle = buildHandle(resumeSessionId)
-      if (setup !== undefined) await setup(agentCtxStub(), handle.agent)
-      servedHandles.set(resumeSessionId, handle)
-      return handle
-    }),
-    get: (id: string) => servedHandles.get(id)?.agent ?? externalAgents.get(id),
-  })
-  ctx.provide('agentPresets', {
-    resolve: vi.fn(async (id: string) => ({ id })),
-    standingKeyFor: vi.fn(async () => {}),
-    mount: mount,
-  })
-  ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'chat' }) })
-  ctx.provide('permissionPresets', { resolve: vi.fn(), set: vi.fn() })
-  ctx.provide('workspaceRegistry', { create: vi.fn(async () => workspace) })
-  ctx.provide('sessionTitle', { rename: vi.fn() })
-  ctx.provide('sessionPersistence', { list: vi.fn(async () => persistedHeaders) })
-  ctx.provide('attachments', { saveFileStream })
-  return ctx
-}
-
-/** Preset mounts observed per handle scope. */
-const mountedPresets: string[] = []
-const mount = vi.fn(async (_agentCtx: unknown, presetId: string) => {
-  mountedPresets.push(presetId)
-})
-
-const workspace = {
-  path: '/tmp/workspace',
-  attachSession: vi.fn(async () => {}),
-  detachSession: vi.fn(async () => {}),
-}
-
-/** Followup and dispose spies per handle, keyed by session id. */
-/** Follow-up spies per session id, keyed like the router's handle map. */
-const followups = new Map<string, Mock<(message: FollowupMessage) => void>>()
-const disposes = new Map<string, ReturnType<typeof vi.fn>>()
-/** WhenIdle behavior hooks per handle; default appends one assistant reply. */
-const whenIdleBehaviors = new Map<string, (events: SessionEvent[]) => Promise<void>>()
-
-/** One content block of a follow-up user message, text or file. */
-interface FollowupBlock {
-  type: string
-  text?: string
-  attachment?: FileAttachmentRef
-}
-
-/** One follow-up user message as the router submits it. */
-interface FollowupMessage {
-  content: FollowupBlock[]
-  source: { kind: string }
-}
-
-/** The agent-scoped context stub: records plugins the router mounts on it. */
-const mountedPlugins: string[] = []
-function agentCtxStub(): { plugin: (plugin: { name: string }) => Promise<void> } {
-  return { plugin: async (plugin) => { mountedPlugins.push(plugin.name) } }
-}
-
-/** Build one stub agent handle with a synchronous one-reply turn. */
-function buildHandle(sessionId: string): AgentHandle {
-  const events: SessionEvent[] = []
-  const followup = vi.fn((message: FollowupMessage) => {
-    void message
-    events.push({ type: 'user/message', seq: events.length, time: 0, data: {} } as SessionEvent)
-  })
-  followups.set(sessionId, followup)
-  const dispose = vi.fn(async () => {
-    servedHandles.delete(sessionId)
-  })
-  disposes.set(sessionId, dispose)
-  const agent = {
-    ctx: agentCtxStub(),
-    session: {
-      id: sessionId,
-      events,
-      get seq(): number {
-        return events.length
-      },
-      snapshotEvents: (): readonly SessionEvent[] => events,
-      header: { agentPreset: 'logged-preset' },
-    },
-    followup,
-    whenIdle: vi.fn(async () => {
-      const hook = whenIdleBehaviors.get(sessionId)
-      if (hook !== undefined) {
-        await hook(events)
-        return
-      }
-      events.push({
-        type: 'assistant/message',
-        seq: events.length,
-        time: 0,
-        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: `answer ${String(events.length)}` }] } },
-      } as SessionEvent)
-    }),
-  }
-  return { agent, dispose } as unknown as AgentHandle
-}
-
-/** Build the router over one stubbed context. */
-function router(ctx: Context, live: FeishuSettings): ConversationRouter {
-  return new ConversationRouter(
-    ctx,
-    { workspacePath: workspace.path, agentPreset: 'standard', permissionPreset: 'read-only' },
-    () => live,
-    reply,
-    replyFile,
-    fetchResourceMock,
-    replyCard,
-  )
-}
-
-/** Temporary DSH_HOME each test writes its router state file into. */
 let homeDir: string
 
 beforeEach(() => {
-  // The router persists chat generations under $DSH_HOME; isolate each test so
-  // resets never leak oc_1 epochs into the real ~/.dsh.
-  homeDir = mkdtempSync(join(tmpdir(), 'dsh-feishu-test-'))
-  process.env.DSH_HOME = homeDir
+  homeDir = isolateHome()
 })
 
 afterEach(() => {
-  process.env.DSH_HOME = undefined
-  rmSync(homeDir, { recursive: true, force: true })
-  reply.mockClear()
-  replyFile.mockClear()
-  replyCard.mockClear()
-  mountedPlugins.length = 0
-  fetchResourceMock.mockClear()
-  saveFileStream.mockClear()
-  mount.mockClear()
-  workspace.attachSession.mockClear()
-  workspace.detachSession.mockClear()
-  servedHandles.clear()
-  externalAgents.clear()
-  followups.clear()
-  disposes.clear()
-  whenIdleBehaviors.clear()
-  mountedPresets.length = 0
-  persistedHeaders = []
-  contexts.forEach(context => void context.fiber.dispose())
-  contexts = []
+  restoreHome(homeDir)
+  resetC10()
 })
 
 describe('ConversationRouter', () => {
@@ -287,201 +70,6 @@ describe('ConversationRouter', () => {
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
     expect(create).toHaveBeenCalledOnce()
     expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(2)
-  })
-
-  it('routes topic messages to their own session beside the chat main stream', async () => {
-    const ctx = stubbedContext()
-    const create = (ctx.get('agents') as unknown as { create: ReturnType<typeof vi.fn> }).create
-    const title = (ctx.get('sessionTitle') as unknown as { rename: ReturnType<typeof vi.fn> }).rename
-    const subject = router(ctx, settings())
-    subject.accept(message({ messageId: 'om_main' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    subject.accept(message({ messageId: 'om_t1', threadId: 'omt_1' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
-    subject.accept(message({ messageId: 'om_t1b', threadId: 'omt_1' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(3) })
-    expect(create).toHaveBeenCalledTimes(2)
-    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledTimes(1)
-    expect(followups.get(sessionIdForThread('oc_1', 'omt_1'))).toHaveBeenCalledTimes(2)
-    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1')
-    expect(title).toHaveBeenCalledWith(expect.anything(), 'Feishu chat oc_1 topic omt_1')
-  })
-
-  it('opens one topic per main-stream message when replyInThread is on', async () => {
-    const ctx = stubbedContext()
-    const opened: { messageId: string; summary: string }[] = []
-    const subject = router(ctx, { ...settings(), replyInThread: true })
-    subject.setTopicOpener({
-      open: async (messageId, summary) => {
-        opened.push({ messageId, summary })
-        return { leadMessageId: 'om_lead', threadId: 'omt_new' }
-      },
-    })
-    subject.accept(message({ text: 'multi\nline   question' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(opened).toEqual([{ messageId: 'om_1', summary: 'multi line question' }])
-    expect(reply).toHaveBeenCalledWith('om_lead', expect.objectContaining({ kind: 'text' }))
-    expect(followups.get(sessionIdForThread('oc_1', 'omt_new'))).toHaveBeenCalledOnce()
-  })
-
-  it('continues an existing topic without opening another when replyInThread is on', async () => {
-    const ctx = stubbedContext()
-    let opens = 0
-    const subject = router(ctx, { ...settings(), replyInThread: true })
-    subject.setTopicOpener({
-      open: async () => {
-        opens += 1
-        return { leadMessageId: 'om_lead', threadId: 'omt_x' }
-      },
-    })
-    subject.accept(message({ messageId: 'om_t', threadId: 'omt_1' }))
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(opens).toBe(0)
-    expect(reply).toHaveBeenCalledWith('om_t', expect.objectContaining({ kind: 'text' }))
-    expect(followups.get(sessionIdForThread('oc_1', 'omt_1'))).toHaveBeenCalledOnce()
-  })
-
-  it('degrades to an in-place reply when topic opening fails', async () => {
-    const ctx = stubbedContext()
-    const subject = router(ctx, { ...settings(), replyInThread: true })
-    subject.setTopicOpener({
-      open: async () => { throw new Error('topic refused') },
-    })
-    subject.accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(reply).toHaveBeenCalledWith('om_1', expect.objectContaining({ kind: 'text' }))
-    expect(followups.get(sessionIdForChat('oc_1'))).toHaveBeenCalledOnce()
-  })
-
-  it('renders a bound platform template for a workflow turn', async () => {
-    const ctx = stubbedContext()
-    const sessionId = sessionIdForChat('oc_1')
-    whenIdleBehaviors.set(sessionId, async (events) => {
-      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
-      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'alarm-report' } } as SessionEvent)
-      events.push({
-        type: 'tool/result', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { runId: 'r1', name: 'alarm-report', result: { reply: 'handled' } } },
-      } as unknown as SessionEvent)
-      events.push({
-        type: 'assistant/message', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
-      } as SessionEvent)
-    })
-    const live: FeishuSettings = {
-      ...settings(),
-      replyForm: 'auto',
-      cardTemplates: [{
-        name: 'alarm',
-        bindTool: 'workflow',
-        templateId: 'AAq1',
-        variables: {
-          who: { from: 'context', key: 'senderOpenId', required: true },
-          reply: { from: 'tool-result', path: 'result.reply', required: true },
-        },
-      }],
-    }
-    router(ctx, live).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(reply).toHaveBeenCalledWith('om_1', {
-      kind: 'template',
-      templateId: 'AAq1',
-      variables: { who: 'ou_1', reply: 'handled' },
-    })
-  })
-
-  it('renders a builder multilingual card export as the canonical 1.0 card', async () => {
-    const ctx = stubbedContext()
-    const sessionId = sessionIdForChat('oc_1')
-    whenIdleBehaviors.set(sessionId, async (events) => {
-      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
-      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
-      events.push({
-        type: 'tool/result', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { result: { reply: 'handled' } } },
-      } as unknown as SessionEvent)
-      events.push({
-        type: 'assistant/message', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
-      } as SessionEvent)
-    })
-    const live: FeishuSettings = {
-      ...settings(),
-      replyForm: 'auto',
-      cardTemplates: [{
-        name: 'alarm',
-        bindTool: 'workflow',
-        card: {
-          config: { update_multi: true },
-          i18n_elements: { zh_cn: [{ tag: 'markdown', content: '任务完成:{{summary}}' }] },
-          i18n_header: { zh_cn: { title: { tag: 'plain_text', content: '告警' }, template: 'red' } },
-        },
-        variables: { summary: { from: 'tool-result', path: 'result.reply', required: true } },
-      }],
-    }
-    router(ctx, live).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(reply).toHaveBeenCalledWith('om_1', {
-      kind: 'localCard',
-      card: {
-        config: { update_multi: true },
-        header: { title: { tag: 'plain_text', content: '告警' }, template: 'red' },
-        elements: [{ tag: 'markdown', content: '任务完成:handled' }],
-      },
-    })
-  })
-
-  it('falls back to the markdown card when a required template variable is unresolvable', async () => {
-    const ctx = stubbedContext()
-    const sessionId = sessionIdForChat('oc_1')
-    whenIdleBehaviors.set(sessionId, async (events) => {
-      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
-      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
-      events.push({
-        type: 'assistant/message', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
-      } as SessionEvent)
-    })
-    const live: FeishuSettings = {
-      ...settings(),
-      replyForm: 'auto',
-      cardTemplates: [{
-        name: 'alarm',
-        bindTool: 'workflow',
-        templateId: 'AAq1',
-        variables: { reply: { from: 'tool-result', path: 'result.reply', required: true } },
-      }],
-    }
-    router(ctx, live).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
-    expect(reply.mock.calls[0]?.[1]?.kind).toBe('card')
-  })
-
-  it('retries a refused template delivery as the markdown card', async () => {
-    const ctx = stubbedContext()
-    const sessionId = sessionIdForChat('oc_1')
-    whenIdleBehaviors.set(sessionId, async (events) => {
-      events.push({ type: 'tool/call', seq: events.length, time: 0, data: { turn: 0, step: 0, callId: 'c1', name: 'workflow', arguments: '{}' } } as SessionEvent)
-      events.push({ type: 'tool-workflow/run-start', seq: events.length, time: 0, data: { runId: 'r1', name: 'n' } } as SessionEvent)
-      events.push({
-        type: 'tool/result', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { id: 'm4', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }], role: 'user' }, meta: { result: { reply: 'handled' } } },
-      } as unknown as SessionEvent)
-      events.push({
-        type: 'assistant/message', seq: events.length, time: 0,
-        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'workflow done' }] } },
-      } as SessionEvent)
-    })
-    const live: FeishuSettings = {
-      ...settings(),
-      replyForm: 'auto',
-      cardTemplates: [{ name: 'alarm', bindTool: 'workflow', templateId: 'AAq1', variables: {} }],
-    }
-    reply.mockRejectedValueOnce(new Error('feishu reply failed with code 230099'))
-    router(ctx, live).accept(message())
-    await vi.waitFor(() => { expect(reply).toHaveBeenCalledTimes(2) })
-    expect(reply.mock.calls[0]?.[1]?.kind).toBe('template')
-    expect(reply.mock.calls[1]?.[1]?.kind).toBe('card')
   })
 
   it('adopts a live agent another channel published instead of colliding on resume', async () => {
@@ -763,7 +351,7 @@ describe('ConversationRouter', () => {
   it('resumes a persisted chat session under its durable preset', async () => {
     const ctx = stubbedContext()
     const sessionId = sessionIdForChat('oc_1')
-    persistedHeaders = [{ header: { id: sessionId } }]
+    persistence.headers = [{ header: { id: sessionId } }]
     const agentsStubs = ctx.get('agents') as unknown as { resume: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }
     router(ctx, settings()).accept(message())
     await vi.waitFor(() => { expect(reply).toHaveBeenCalledOnce() })
