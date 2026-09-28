@@ -13,6 +13,12 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 /** Feishu refuses messaging uploads over 30 MB and refuses empty files. */
 const MAX_FILE_BYTES = 30 * 1024 * 1024
 
+/** A card payload must be a plain object carrying Feishu's elements array. */
+function isCardPayload(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  return Array.isArray((value as Record<string, unknown>).elements)
+}
+
 /** The tool name the settlement scan matches. */
 export const DELIVER_TOOL_NAME = 'feishu_deliver'
 
@@ -32,16 +38,21 @@ export function apply(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: DELIVER_TOOL_NAME,
     description:
-      'Queue finished files for delivery to the Feishu chat this turn answers. '
+      'Queue finished files and/or interactive message cards for delivery to the Feishu chat this turn answers. '
       + 'Call it once per turn with the final deliverables only — never intermediate artifacts. '
       + 'Each path is validated now (must exist, be a non-empty file under 30 MB) '
-      + 'and uploaded to the chat after the turn settles.',
+      + 'and uploaded to the chat after the turn settles. Each card is a Feishu card JSON object '
+      + '(must contain an "elements" array; optional "header" and "config") and is sent as an interactive message.',
     parameters: {
       paths: {
         type: 'array',
-        required: true,
         description: 'Absolute paths of the finished files to deliver.',
         items: { type: 'string' },
+      },
+      cards: {
+        type: 'array',
+        description: 'Feishu interactive card JSON objects to send, in order. Each object needs an "elements" array.',
+        items: { type: 'object', additionalProperties: true },
       },
     },
     output: {
@@ -74,19 +85,31 @@ export function apply(ctx: Context): void {
               },
             },
           },
+          acceptedCards: {
+            type: 'integer',
+            required: true,
+          },
+          rejectedCards: {
+            type: 'integer',
+            required: true,
+          },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: `Delivery queue: ${String(value.accepted.length)} accepted `
+        text: `Delivery queue: ${String(value.accepted.length)} files accepted `
           + `(${value.accepted.map(file => file.name).join(', ') || 'none'}), `
-          + `${String(value.rejected.length)} rejected.`,
+          + `${String(value.rejected.length)} files rejected; `
+          + `${String(value.acceptedCards)} cards accepted, ${String(value.rejectedCards)} cards rejected.`,
       }],
     },
     async execute(args) {
       const accepted: { path: string; name: string; bytes: number }[] = []
       const rejected: { path: string; reason: string }[] = []
-      for (const path of args.paths) {
+      const paths = Array.isArray(args.paths) ? (args.paths as unknown[]) : []
+      const cards = Array.isArray(args.cards) ? (args.cards as unknown[]) : []
+      for (const path of paths) {
+        if (typeof path !== 'string') continue
         try {
           const info = await stat(path)
           if (!info.isFile()) {
@@ -106,7 +129,16 @@ export function apply(ctx: Context): void {
           rejected.push({ path, reason: error instanceof Error ? error.message : String(error) })
         }
       }
-      return { accepted, rejected }
+      let acceptedCards = 0
+      let rejectedCards = 0
+      for (const card of cards) {
+        if (isCardPayload(card)) {
+          acceptedCards += 1
+        } else {
+          rejectedCards += 1
+        }
+      }
+      return { accepted, rejected, acceptedCards, rejectedCards }
     },
     presentCall: args => ({ card: 'generic', title: 'Deliver files to Feishu', kind: 'other', rawInput: args.paths }),
   }))

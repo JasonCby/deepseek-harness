@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话的主消息流与各话题线程映射到各自的多轮根 Session；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 以纯文本或单张 markdown 卡片回发。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。交互卡片应答回合内的审批与用户提问请求：确认按钮解决审批瀑布，生成的表单解决 `ask_user_question`，回调响应本身把卡片刷新为结算样式。
+`dsh-feishu` 把飞书机器人变成 DSH 的前置入口。每个飞书会话的主消息流与各话题线程映射到各自的多轮根 Session——重置命令下按代际各自成会话；每条获准的消息成为一轮普通 follow-up；轮次完成后会话日志中的助手文本经飞书 API 以纯文本或单张 markdown 卡片回发，随后是该轮声明的交付文件与交互卡片。两条互斥传输边承载事件——无需公网地址的外拨 WSS 长连接，以及挂在可选组合的 `dsh-host-webserver` 上的入站 webhook 路由——`feishu` 设置段变更时活动边热切换。交互卡片应答回合内的审批与用户提问请求：确认按钮解决审批瀑布，生成的表单解决 `ask_user_question`，回调响应本身把卡片刷新为结算样式。
 
 ## 目录
 
@@ -17,6 +17,7 @@ kind: "package-reference"
 - [传输](#transports)
 - [交互卡片](#interactive-cards)
 - [服务 API](#service-api)
+- [聊天命令](#chat-commands)
 - [Model Experience](#model-experience)
 - [已知限制与后续工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -63,8 +64,8 @@ kind: "package-reference"
 <a id="service-api"></a>
 ## 服务 API
 
-- `sessionIdForChat(chatId)` — 确定性的 `feishu-<sha256(chatId)>` Session id；重启后以同一 id 恢复持久化会话，无需旁路映射存储。
-- `sessionIdForThread(chatId, threadId)` — 同一派生规则对会话与话题身份联合哈希；一个话题线程是主消息流之外的一个独立 session。
+- `sessionIdForChat(chatId, epoch = 0)` — 确定性的 `feishu-<sha256(chatId#epoch)>` Session id，每个聊天代际一个；重启后以同一 id 恢复持久化会话，无需旁路映射存储，重置命令递增 `epoch` 让聊天在全新会话中继续。
+- `sessionIdForThread(chatId, threadId, epoch = 0)` — 同一派生规则对会话、话题与代际身份联合哈希；一个话题线程是主消息流之外的一个独立 session。
 - `ConversationRouter` — 按消息 id 去重、按会话排队、会话创建/恢复（其他通道为会话发布的存活 agent——如 Web UI——直接收养而非重复恢复）、从会话日志结算轮次、以尽力而为的思考表情括起每条获准消息，并在 `replyInThread` 下为主消息流每条消息开一个 bot 话题、就地取代主消息流作答。
 - `createTopicOpener` / `topicSummary` — 开话题的回复（`reply_in_thread`，引导消息承载单行化的问题摘要）及其纯摘要投影。
 - `matchCardTemplate` / `resolveTemplateVariables` / `resolveCardFormat` / `normalizeTemplateCard` / `renderTemplateReply` — 纯卡片模板管道：按轮次工具调用做注册表匹配、从已落日志的 tool-result meta 与消息事实提取变量、方言解析（规范 1.0 或搭建工具多语言导出；卡片 JSON 2.0 按名拒绝）、语种提升为规范发送形态、渲染平台或本地载荷。
@@ -78,6 +79,13 @@ kind: "package-reference"
 - `renderMarkdownCard` — `card` 回复形式所用的纯投影：结算文本 → 卡片 JSON 1.0（固定蓝色头部承载 `cardTitle` + 单个 markdown 元素）。
 
 每条获准的聊天消息追加为一条 `user/message`，source 为 `{ kind: 'feishu', chatId, messageId, form: 'notice', summary }`（声明合并进 `MessageSourceMap`）。
+
+<a id="chat-commands"></a>
+## 聊天命令
+
+一条获准消息的文本（去除首尾空白后）恰为 `/new`、`/reset` 或 `/新会话` 时，聊天切换到新的会话代际而不进入 agent：路由器弃用该聊天的路由句柄、递增代际、持久化，并回复固定提示 `已开启新会话，此前的对话上下文已清空。`。下一条普通消息开启新会话，而被弃用的会话保留其持久日志，在 Web UI 中仍可打开。
+
+代际存放于 `$DSH_HOME`（默认 `~/.dsh`）下的 `feishu-router-state.json`，首次使用时加载并以原子替换写入；文件缺失或不可读时，每个聊天从代际 0 开始。
 
 ## Model Experience
 
@@ -95,15 +103,15 @@ kind: "package-reference"
 
 只增不改：每条获准消息追加到对话。设置变更永不重写历史；传输热切换只触及边，不动会话日志。
 
-### 交付文件（`feishu_deliver`）
+### 交付文件与卡片（`feishu_deliver`）
 
 #### 模型可见内容
 
-工具 schema：一个必填的 `paths` 绝对路径数组。描述引导模型每轮只以最终交付物调用一次——绝不交付中间产物——并写明即时校验（存在、非空文件、低于飞书 30 MB 上限）。调用即答 `Delivery queue: <n> accepted (<names>), <m> rejected.`。轮次结算后，路由器从会话日志重放本轮的交付调用，把每个声明文件（`im/v1/files`，`stream` 类型）上传为独立文件消息；单个上传失败只记日志、绝不让轮次失败，每轮最多回传 20 个文件。
+工具 schema：可选的 `paths` 绝对路径数组，以及可选的 `cards` 飞书交互卡片 JSON 对象数组。描述引导模型每轮只以最终交付物调用一次——绝不交付中间产物——并写明即时校验（存在、非空文件、低于飞书 30 MB 上限；卡片对象需携带 `elements` 数组）。调用即答 `Delivery queue: <n> files accepted (<names>), <m> files rejected; <c> cards accepted, <d> cards rejected.`。轮次结算后，路由器从会话日志重放本轮的交付调用：每张去重后的声明卡片先以 `msg_type: 'interactive'` 消息回复，随后每个声明文件（`im/v1/files`，`stream` 类型）上传为独立文件消息。单张卡片或单次上传失败只记日志、绝不让轮次失败，每轮最多 20 张卡片加 20 个文件。
 
 #### Token 效应
 
-工具可见的每个请求承担固定 schema 成本；模型提交的路径保留在调用参数中直至压缩。交付本身只读持久日志，不耗模型 token。
+工具可见的每个请求承担固定 schema 成本；模型提交的路径与卡片保留在调用参数中直至压缩。交付本身只读持久日志，不耗模型 token。
 
 #### KV Cache 效应
 
@@ -123,6 +131,7 @@ kind: "package-reference"
 - **`replyInThread` 依赖部署支持话题式回复** — 已在 SaaS 私聊与普通群验证；私有化部署若拒绝 `reply_in_thread`，受影响轮次一律降级为就地回复（记日志），绝不丢失。
 - **模板投递大声降级** — 变量不可解析、超长或飞书拒绝模板内容时，回复降级为 markdown 卡片（记日志）；本地卡片的 `img_key` 属于上传该图片的应用。
 - **飞书 markdown 为子集** — 卡片回复按飞书 markdown 方言渲染；GFM 表格等不支持的语法在卡片中降级。
+- **卡片校验止于 `elements` 数组** — 工具只拒绝完全不可能成为卡片的载荷，因此违反飞书卡片 schema 其余部分的卡片会被飞书 API 拒绝、记入日志并跳过，其余卡片与文件照常送达。
 - **恢复的会话使用部署默认模型路由** — 从 Web UI 切换的模型不随进程重启在会话中保留。
 - **未加密的 webhook 无签名校验** — encrypt key 为空时 SDK dispatcher 接受未签名请求体；此类部署依赖路由保密（隔离监听器模式见 GitHub webhook 指南）。
 - **卡片回调的投递方式由飞书控制台决定** — 长连接模式无需路由；请求地址模式需要组合 WebServer 及其 `<path>/card` 路由，缺 WebServer 时跳过并记日志。
@@ -135,6 +144,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 —— 点击展开</summary>
 
-传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)；卡片模板记录于[模板 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.zh.md)；交互卡片与其回调桥接记录于[卡片交互 Note](../../../.agents/notes/implemented/architecture/2026-09-14-feishu-card-interactions.zh.md)。
+传输无关的核心刻意绕过 `dsh-webhook` 运行时：聊天延续、完成结算与出站回复路径都不符合其一次性 fire-and-forget 契约。可选 WebServer 必须经 `ctx.inject` 消费，因为 loader 条目处于 realm 隔离；插件上下文里的动态 `ctx.get` 解析不到任何东西。设计依据与被否决的备选见 [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.zh.md)。卡片回复记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.zh.md)；按轮自动路由回复形式记录于[auto-form Note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.zh.md)；跨通道存活 agent 收养记录于[收养 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.zh.md)；思考表情记录于[其专属 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.zh.md)；话题 session 记录于[话题 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.zh.md)；bot 开话题记录于[reply-in-thread Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.zh.md)；卡片模板记录于[模板 Note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.zh.md)；交互卡片与其回调桥接记录于[卡片交互 Note]()；卡片投递与聊天代际记录于[会话重置 Note](../../../.agents/notes/implemented/feature/2026-09-16-feishu-interactive-cards-and-session-reset.zh.md)。
 
 </details>

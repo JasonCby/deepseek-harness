@@ -60,8 +60,8 @@ export type { LarkSdk, LarkApiClient, LarkMessageReactionResource, LarkDispatche
 export { frameChatPrompt, stripMentionPlaceholders } from './prompt.ts'
 export { renderMarkdownCard } from './card.ts'
 export type { FeishuCard } from './card.ts'
-export { createFileReplySender, createReplySender, truncateReply } from './reply.ts'
-export type { FileReplySender, ReplySender, ReplyContent } from './reply.ts'
+export { createCardReplySender, createFileReplySender, createReplySender, truncateReply } from './reply.ts'
+export type { CardReplySender, FileReplySender, ReplySender, ReplyContent } from './reply.ts'
 export { createReactionSender } from './reaction.ts'
 export type { ReactionSender } from './reaction.ts'
 export { createTopicOpener, topicSummary } from './topic.ts'
@@ -76,7 +76,7 @@ export type {
   TemplateReplyPayload,
   ResolvedTemplateVariables,
 } from './template.ts'
-export { extractDeliverables, extractReplyText, resolveReplyForm } from './settlement.ts'
+export { extractCards, extractDeliverables, extractReplyText, resolveReplyForm } from './settlement.ts'
 export { MessageDedup } from './dedup.ts'
 
 /** Cordis function-plugin name. */
@@ -116,6 +116,7 @@ export function apply(ctx: Context, config: Config): void {
     () => Promise.reject(new Error('feishu: no transport edge is active')),
     (_messageId, file) => Promise.reject(new Error(`feishu: no transport edge is active for delivering ${file.name}`)),
     (_messageId, attachment) => Promise.reject(new Error(`feishu: no transport edge is active for attachment ${attachment.key}`)),
+    (_messageId, _card) => Promise.reject(new Error('feishu: no transport edge is active for delivering card')),
   )
   router.setInteractionBridge(interactions)
   // Loader entries live in isolated realms, so the optional WebServer is only

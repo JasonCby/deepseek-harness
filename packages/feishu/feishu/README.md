@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat's main stream and topic threads map to their own multi-turn root Session; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API as plain text or one markdown card. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes. Interactive cards answer in-turn approval and user-question requests: confirm buttons resolve the approval waterfall, generated forms resolve `ask_user_question`, and the callback response refreshes the card to its settled style.
+`dsh-feishu` turns a Feishu (Lark) bot into a DSH front door. Each Feishu chat's main stream and topic threads map to their own multi-turn root Session — one per generation under the reset commands; every admitted message becomes one ordinary follow-up turn; and the assistant text the completed turn leaves in the session log is replied through the Feishu API as plain text or one markdown card, followed by the deliverable files and interactive cards that turn declared. Two mutually exclusive transport edges carry events — an outbound WSS long connection that needs no public URL, and an inbound webhook route on an optionally composed `dsh-host-webserver` — and the active edge hot-swaps when the `feishu` settings section changes. Interactive cards answer in-turn approval and user-question requests: confirm buttons resolve the approval waterfall, generated forms resolve `ask_user_question`, and the callback response refreshes the card to its settled style.
 
 ## Table of Contents
 
@@ -17,6 +17,7 @@ English | [中文](README.zh.md)
 - [Transports](#transports)
 - [Interactive cards](#interactive-cards)
 - [Service API](#service-api)
+- [Chat commands](#chat-commands)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -63,8 +64,8 @@ Cards only claim requests of turns this channel is serving: an anchored turn ans
 <a id="service-api"></a>
 ## Service API
 
-- `sessionIdForChat(chatId)` — deterministic `feishu-<sha256(chatId)>` Session id; a restart resumes the persisted session under the same id with no side-car mapping.
-- `sessionIdForThread(chatId, threadId)` — the same derivation hashing the chat and topic identities; one topic thread is one session beside the chat's main stream.
+- `sessionIdForChat(chatId, epoch = 0)` — deterministic `feishu-<sha256(chatId#epoch)>` Session id, one per chat generation; a restart resumes the persisted session under the same id with no side-car mapping, and a reset command bumps `epoch` so the chat continues in a fresh session.
+- `sessionIdForThread(chatId, threadId, epoch = 0)` — the same derivation hashing the chat, topic, and generation identities; one topic thread is one session beside the chat's main stream.
 - `ConversationRouter` — dedup by message id, per-chat queueing, session create/resume (a live agent another channel published for the chat's session, e.g. the Web UI, is adopted instead of resumed), turn settlement from the session log, a best-effort thinking reaction bracketing each admitted turn, and — under `replyInThread` — one bot-opened topic per main-stream message answered in place of the main stream.
 - `createTopicOpener` / `topicSummary` — the topic-opening reply (`reply_in_thread`, lead message carrying the single-lined question summary) and its pure summary projection.
 - `matchCardTemplate` / `resolveTemplateVariables` / `resolveCardFormat` / `normalizeTemplateCard` / `renderTemplateReply` — the pure card-template pipeline: registry matching over the turn's tool calls, variable extraction from logged tool-result meta and message facts, dialect resolution (canonical 1.0 or builder multilingual export; card JSON 2.0 rejected by name), locale lifting onto the canonical send form, and platform-or-local payload rendering.
@@ -78,6 +79,18 @@ Cards only claim requests of turns this channel is serving: an anchored turn ans
 - `renderMarkdownCard` — the pure settled-text → card-JSON-1.0 projection (fixed blue header carrying `cardTitle`, one markdown element) the `card` reply form sends.
 
 Each admitted chat message is appended as one `user/message` whose source is `{ kind: 'feishu', chatId, messageId, form: 'notice', summary }` (declaration-merged into `MessageSourceMap`).
+
+<a id="chat-commands"></a>
+## Chat commands
+
+One admitted message whose trimmed text is exactly `/new`, `/reset`, or `/新会话` moves the chat to a new session generation instead of reaching the agent: the router unbinds the chat's routing handle, advances the generation ceiling, persists it, and replies with a notice naming the new generation (`已开启新会话（#n）。…`). The next ordinary message starts the new session, while the retired session keeps its persisted log, stays openable in the Web UI, and remains switchable.
+
+Two more commands manage the generations, also never reaching the agent:
+
+- `/sessions` — lists every generation newest-first (generation number, short session id, creation time), marking the one currently routed; generations a `/new` left unused are marked 未使用; capped at the most recent 20. Angle brackets copied from the usage text (`/switch <1>`) parse the same as a bare number.
+- `/switch <n>` — moves the routing pointer to generation `n`; the next message resumes (or borrows) that session through the ordinary path. Out-of-range or malformed arguments answer with usage and change nothing.
+
+Generations live in `feishu-router-state.json` under `$DSH_HOME` (default `~/.dsh`) as `{chatId: {current, max}}`, loaded on first use and replaced atomically; a missing or unreadable file starts every chat at generation 0, and a legacy `{chatId: number}` file migrates to `{current: n, max: n}`. `/new` always opens `max + 1` — after a `/switch` back, `current + 1` would collide with an existing session id.
 
 ## Model Experience
 
@@ -95,15 +108,15 @@ Data-dependent: one prompt per admitted message. Retries are deduplicated before
 
 Append-only: each admitted message extends the conversation. Settings changes never rewrite history; a transport hot-swap touches only the edges, not the session log.
 
-### Deliverable files (`feishu_deliver`)
+### Deliverable files and cards (`feishu_deliver`)
 
 #### What the model sees
 
-The tool's schema: one required `paths` array of absolute file paths. The description instructs the model to call it once per turn with final deliverables only — never intermediate artifacts — and states the immediate validation (exists, non-empty file, under Feishu's 30 MB cap). A call answers with `Delivery queue: <n> accepted (<names>), <m> rejected.` After the turn settles, the router replays the turn's deliver calls from the session log and uploads each declared file (`im/v1/files`, type `stream`) as its own file message; one upload failing is logged and never fails the turn, and at most 20 files go out per turn.
+The tool's schema: an optional `paths` array of absolute file paths and an optional `cards` array of Feishu interactive card JSON objects. The description instructs the model to call it once per turn with final deliverables only — never intermediate artifacts — and states the immediate validation (an existing, non-empty file under Feishu's 30 MB cap; a card object carrying an `elements` array). A call answers with `Delivery queue: <n> files accepted (<names>), <m> files rejected; <c> cards accepted, <d> cards rejected.` After the turn settles, the router replays the turn's deliver calls from the session log: each distinct declared card replies first as an `msg_type: 'interactive'` message, then each declared file uploads (`im/v1/files`, type `stream`) as its own file message. One card or upload failing is logged and never fails the turn, and at most 20 cards plus 20 files go out per turn.
 
 #### Token effect
 
-Fixed schema cost on every request where the tool is visible; the paths the model submits persist in the call arguments until compaction. Delivery itself reads the durable log only and costs no model tokens.
+Fixed schema cost on every request where the tool is visible; the paths and cards the model submits persist in the call arguments until compaction. Delivery itself reads the durable log only and costs no model tokens.
 
 #### KV Cache effect
 
@@ -123,6 +136,7 @@ Prefix-stable while the definition is unchanged; the tool mounts identically on 
 - **`replyInThread` needs the thread-opening reply on the deployment** — verified on the SaaS p2p and regular-group surfaces; a private deployment that refuses `reply_in_thread` degrades every affected turn to an in-place reply (logged), never to a lost one.
 - **Template delivery falls back loudly** — an unresolvable or over-long variable and a Feishu refusal of the template content each downgrade the reply to the markdown card (logged); a local card's `img_key` belongs to the app that uploaded the image.
 - **Feishu markdown is a subset** — card-form replies render in Feishu's markdown dialect; GFM tables and other unsupported syntax degrade inside the card.
+- **Card validation stops at the `elements` array** — the tool rejects only payloads that cannot be a card at all, so a card that violates the rest of Feishu's card schema is refused by the Feishu API, logged, and skipped while the remaining cards and files still go out.
 - **Resumed chats use the deployment's default model route** — a model switch made from the Web UI does not survive a process restart for chat sessions.
 - **Unencrypted webhooks carry no signature check** — with an empty encrypt key the SDK dispatcher accepts unsigned bodies; such deployments rely on route secrecy (see the GitHub webhook guide for the isolated-listener pattern).
 - **The card-callback delivery mode lives in the Feishu console** — long-connection mode needs no route; request-address mode needs the composed WebServer and its `<path>/card` route, which is skipped with a logged warn when no WebServer is composed.
@@ -134,6 +148,6 @@ Prefix-stable while the definition is unchanged; the tool mounts identically on 
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md). Card replies are recorded in [their own note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.md); automatic per-turn form routing in [the auto-form note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.md); cross-channel live-agent adoption in [the adoption note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.md); the thinking reaction in [its own note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.md); topic sessions in [the topic note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.md); bot-opened topics in [the reply-in-thread note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.md); card templates in [the templates note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.md); interactive cards and their callback bridge in [the card-interactions note](../../../.agents/notes/implemented/architecture/2026-09-14-feishu-card-interactions.md).
+The transport-agnostic core deliberately bypasses `dsh-webhook`'s runtime: chat continuity, completion settlement, and the outbound reply path do not fit its one-shot fire-and-forget contract. The optional WebServer must be consumed through `ctx.inject` because loader entries are realm-isolated; a dynamic `ctx.get` from the plugin context resolves nothing. Design rationale and rejected alternatives: [Agent Note](../../../.agents/notes/implemented/architecture/2026-09-08-feishu-bot-plugin.md). Card replies are recorded in [their own note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-card-replies.md); automatic per-turn form routing in [the auto-form note](../../../.agents/notes/implemented/architecture/2026-09-10-feishu-auto-reply-form.md); cross-channel live-agent adoption in [the adoption note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-live-agent-adoption.md); the thinking reaction in [its own note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-thinking-reaction.md); topic sessions in [the topic note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-topic-sessions.md); bot-opened topics in [the reply-in-thread note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-reply-in-thread.md); card templates in [the templates note](../../../.agents/notes/implemented/architecture/2026-09-11-feishu-card-templates.md); interactive cards and their callback bridge in [the card-interactions note](../../../.agents/notes/implemented/architecture/2026-09-14-feishu-card-interactions.md); card delivery and chat generations in [the session-reset note](../../../.agents/notes/implemented/feature/2026-09-16-feishu-interactive-cards-and-session-reset.md).
 
 </details>

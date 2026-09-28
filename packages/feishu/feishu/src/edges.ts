@@ -8,7 +8,7 @@ import type { LarkSdk } from './lark.ts'
 import { normalizeEventData } from './ingress.ts'
 import type { CardAction, CardActionResponse } from './interaction.ts'
 import { parseCardAction } from './interaction.ts'
-import { createFileReplySender, createReplySender, type FileReplySender, type ReplySender } from './reply.ts'
+import { createCardReplySender, createFileReplySender, createReplySender, type CardReplySender, type FileReplySender, type ReplySender } from './reply.ts'
 import { createReactionSender, type ReactionSender } from './reaction.ts'
 import { createTopicOpener, type TopicOpener } from './topic.ts'
 import { createResourceFetcher, type ResourceFetcher } from './resource.ts'
@@ -52,6 +52,8 @@ export interface TransportEdge {
   topics: TopicOpener
   /** File replies uploaded and sent through this edge's app credentials. */
   replyFile: FileReplySender
+  /** Interactive card replies sent through this edge's app credentials. */
+  replyCard: CardReplySender
   /** Attachment downloads served through this edge's app credentials. */
   fetchResource: ResourceFetcher
 }
@@ -153,6 +155,7 @@ export function startWebsocketEdge(
     reactions: createReactionSender(api),
     topics: createTopicOpener(api),
     replyFile: createFileReplySender(api),
+    replyCard: createCardReplySender(api),
     fetchResource: createResourceFetcher(api),
   }
 }
@@ -306,6 +309,7 @@ export async function startWebhookEdge(
     reactions: createReactionSender(api),
     topics: createTopicOpener(api),
     replyFile: createFileReplySender(api),
+    replyCard: createCardReplySender(api),
     fetchResource: createResourceFetcher(api),
   }
 }
@@ -411,6 +415,7 @@ export class EdgeController {
     this.router.setReactionSender(edge.reactions)
     this.router.setTopicOpener(edge.topics)
     this.router.setFileReplySender(edge.replyFile)
+    this.router.setCardReplySender(edge.replyCard)
     this.router.setResourceFetcher(edge.fetchResource)
     this.interactions.setReplySender(edge.reply)
   }

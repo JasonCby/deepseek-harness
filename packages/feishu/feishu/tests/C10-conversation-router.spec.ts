@@ -5,7 +5,10 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ConversationRouter, sessionIdForChat, sessionIdForThread } from '../src/conversation.ts'
 import type { FeishuSettings } from '../src/config.ts'
 import type { ReplyContent } from '../src/reply.ts'
@@ -63,6 +66,9 @@ const reply = vi.fn(async (_messageId: string, _content: ReplyContent) => {})
 
 /** The single file reply sender the router delivers declared files through. */
 const replyFile = vi.fn(async (_messageId: string, _file: { name: string; path: string }) => {})
+
+/** The single card reply sender the router delivers declared cards through. */
+const replyCard = vi.fn(async (_messageId: string, _card: Record<string, unknown>) => {})
 
 /** The resource fetcher the router downloads attachments through. */
 const fetchResourceMock = vi.fn(
@@ -214,12 +220,26 @@ function router(ctx: Context, live: FeishuSettings): ConversationRouter {
     reply,
     replyFile,
     fetchResourceMock,
+    replyCard,
   )
 }
 
+/** Temporary DSH_HOME each test writes its router state file into. */
+let homeDir: string
+
+beforeEach(() => {
+  // The router persists chat generations under $DSH_HOME; isolate each test so
+  // resets never leak oc_1 epochs into the real ~/.dsh.
+  homeDir = mkdtempSync(join(tmpdir(), 'dsh-feishu-test-'))
+  process.env.DSH_HOME = homeDir
+})
+
 afterEach(() => {
+  process.env.DSH_HOME = undefined
+  rmSync(homeDir, { recursive: true, force: true })
   reply.mockClear()
   replyFile.mockClear()
+  replyCard.mockClear()
   mountedPlugins.length = 0
   fetchResourceMock.mockClear()
   saveFileStream.mockClear()
@@ -615,6 +635,80 @@ describe('ConversationRouter', () => {
     // Only the deliver tool's declarations reach the upload; bash calls contribute nothing.
     expect(replyFile).toHaveBeenNthCalledWith(1, 'om_1', { name: 'report.pdf', path: '/tmp/report.pdf' })
     expect(replyFile).toHaveBeenNthCalledWith(2, 'om_1', { name: 'data.csv', path: '/tmp/data.csv' })
+  })
+
+  it('delivers interactive cards the turn declared through the deliver tool before files', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    const card = { config: { wide_screen_mode: true }, header: { title: { tag: 'plain_text', content: '日报' } }, elements: [{ tag: 'div', text: { tag: 'lark_md', content: '**完成**' } }] }
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'tool/call',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, callId: 'c1', name: 'feishu_deliver', arguments: JSON.stringify({ cards: [card], paths: ['/tmp/report.pdf'] }) },
+      } as SessionEvent)
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'card attached' }] } },
+      } as SessionEvent)
+    })
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(replyCard).toHaveBeenCalledOnce() })
+    expect(replyCard).toHaveBeenCalledWith('om_1', card)
+    expect(replyFile).toHaveBeenCalledOnce()
+  })
+
+  it('ignores card payloads without an elements array', async () => {
+    const ctx = stubbedContext()
+    const sessionId = sessionIdForChat('oc_1')
+    whenIdleBehaviors.set(sessionId, async (events) => {
+      events.push({
+        type: 'tool/call',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, callId: 'c1', name: 'feishu_deliver', arguments: JSON.stringify({ cards: [{ header: { title: 'no elements' } }, 'not-an-object'] }) },
+      } as SessionEvent)
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        time: 0,
+        data: { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'no valid cards' }] } },
+      } as SessionEvent)
+    })
+    router(ctx, settings()).accept(message())
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_1', { kind: 'text', text: 'no valid cards' }) })
+    expect(replyCard).not.toHaveBeenCalled()
+  })
+
+  it('starts a fresh session when a reset command lands, keeping the old one persisted', async () => {
+    const ctx = stubbedContext()
+    const r = router(ctx, settings())
+    // First ordinary message creates the generation-0 session.
+    r.accept(message({ messageId: 'om_1', text: 'first topic' }))
+    await vi.waitFor(() => {
+      const settled = reply.mock.calls.at(-1)?.[1]
+      expect(settled?.kind).toBe('text')
+      expect(settled?.text).toContain('answer')
+    })
+    const firstSession = sessionIdForChat('oc_1', 0)
+    expect(disposes.get(firstSession)).not.toHaveBeenCalled()
+    // A reset command never reaches the agent; it only moves the chat pointer on.
+    r.accept(message({ messageId: 'om_2', text: '/new' }))
+    await vi.waitFor(() => { expect(reply).toHaveBeenCalledWith('om_2', { kind: 'text', text: '已开启新会话（#1）。输入 /sessions 可查看历史会话，/switch <序号> 可切回。' }) })
+    // The old agent stays alive (still listed in the Web UI), just unbound.
+    expect(disposes.get(firstSession)).not.toHaveBeenCalled()
+    expect(servedHandles.has(firstSession)).toBe(true)
+    const followup0 = followups.get(firstSession)
+    // The next ordinary message opens a different, fresh session.
+    r.accept(message({ messageId: 'om_3', text: 'second topic' }))
+    const secondSession = sessionIdForChat('oc_1', 1)
+    await vi.waitFor(() => { expect(servedHandles.has(secondSession)).toBe(true) })
+    expect(secondSession).not.toBe(firstSession)
+    expect(followups.get(secondSession)).toHaveBeenCalledOnce()
+    expect(followup0).toHaveBeenCalledOnce()
   })
 
   it('keeps the settled turn when one file delivery fails', async () => {

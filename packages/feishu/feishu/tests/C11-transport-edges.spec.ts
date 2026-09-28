@@ -79,6 +79,7 @@ interface SdkTrace {
     setReactionSender: Mock<(sender: ReactionSender) => void>
     setTopicOpener: Mock<(opener: TopicOpener) => void>
     setFileReplySender: Mock
+    setCardReplySender: Mock
     setResourceFetcher: Mock
   }
 }
@@ -101,6 +102,7 @@ function fakeSdk(): SdkTrace {
       setReactionSender: vi.fn((_sender: ReactionSender) => {}),
       setTopicOpener: vi.fn((_opener: TopicOpener) => {}),
       setFileReplySender: vi.fn(),
+      setCardReplySender: vi.fn(),
       setResourceFetcher: vi.fn(),
     },
     sdk: {
@@ -242,6 +244,7 @@ describe('EdgeController', () => {
     expect(trace.router.setReactionSender).toHaveBeenCalledOnce()
     expect(trace.router.setTopicOpener).toHaveBeenCalledOnce()
     expect(trace.router.setFileReplySender).toHaveBeenCalledOnce()
+    expect(trace.router.setCardReplySender).toHaveBeenCalledOnce()
     expect(trace.router.setResourceFetcher).toHaveBeenCalledOnce()
     const registered = trace.dispatchers[0]?.register.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(registered !== undefined && 'im.message.receive_v1' in registered).toBe(true)
