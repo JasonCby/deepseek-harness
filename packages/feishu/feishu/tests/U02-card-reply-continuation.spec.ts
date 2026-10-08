@@ -152,13 +152,13 @@ describe('interaction cards', () => {
     // Feishu rejects form selects whose options carry no value (card error
     // 230099 "duplicated option value"), so each option's value is its label.
     // Every menu ends with the "type below" hint choice; submit drops it.
-    const select = fields.find(field => field.tag === 'select_static') as { options: { text: { content: string }; value: string }[] }
+    const select = fields.find(field => field.tag === 'select_static') as unknown as { options: { text: { content: string }; value: string }[] }
     expect(select.options).toEqual([
       { text: { tag: 'plain_text', content: 'A' }, value: 'A' },
       { text: { tag: 'plain_text', content: 'B' }, value: 'B' },
       { text: { tag: 'plain_text', content: SELF_INPUT_OPTION_LABEL }, value: SELF_INPUT_OPTION_LABEL },
     ])
-    const multi = fields.find(field => field.tag === 'multi_select_static') as { options: { text: { content: string } }[] }
+    const multi = fields.find(field => field.tag === 'multi_select_static') as unknown as { options: { text: { content: string } }[] }
     expect(multi.options.map(option => option.text.content)).toEqual(['X', 'Y', SELF_INPUT_OPTION_LABEL])
     // The skip button sits outside the form: a plain callback cannot carry
     // half-filled values, so skipping settles every question unanswered.

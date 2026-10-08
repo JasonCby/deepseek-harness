@@ -34,8 +34,8 @@ export interface CardAction {
   readonly interactionId: string | undefined
   /** Approval verdict a button value carried, when the click was an approval button. */
   readonly outcome: 'approved' | 'rejected' | undefined
-  /** Whether the click was a skip button settling every question unanswered. */
-  readonly skip: boolean | undefined
+  /** Whether the click was a skip button settling every question unanswered; absent when the payload carried no skip flag. */
+  readonly skip?: boolean | undefined
   /** Submitted form field values keyed by component name, when the click submitted a form. */
   readonly formValue: Readonly<Record<string, unknown>> | undefined
   /** Acting operator's open id. */
