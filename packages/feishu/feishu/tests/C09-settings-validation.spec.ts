@@ -1,4 +1,4 @@
-/** C09: settings and composition config validation — domains, paths, notices, allowlists, credential refs, card templates. */
+﻿/** C09: settings and composition config validation — domains, paths, notices, allowlists, credential refs, card templates. */
 
 import { assertConfig, assertSettings, credentialRefsOf, type FeishuSettings } from '../src/config.ts'
 import type { CardTemplateEntry } from '../src/template.ts'
@@ -49,7 +49,7 @@ function base(): FeishuSettings {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

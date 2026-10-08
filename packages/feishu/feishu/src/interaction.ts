@@ -16,7 +16,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome, ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import type { AskUserQuestionAnswer, AskUserQuestionAnswerItem, AskUserQuestionItem, AskUserQuestionRequestEvent } from '@deepseek-ai/dsh-user-questions/types'
 import type { FeishuSettings } from './config.ts'
-import { buildApprovalCard, buildQuestionCard, buildSettledCard, QUESTION_FIELD_PREFIX } from './interaction-card.ts'
+import { buildApprovalCard, buildQuestionCard, buildSettledCard, QUESTION_CUSTOM_SUFFIX, QUESTION_FIELD_PREFIX, SELF_INPUT_OPTION_LABEL } from './interaction-card.ts'
 import type { ReplySender } from './reply.ts'
 import type { InteractionId } from './types.ts'
 
@@ -34,6 +34,8 @@ export interface CardAction {
   readonly interactionId: string | undefined
   /** Approval verdict a button value carried, when the click was an approval button. */
   readonly outcome: 'approved' | 'rejected' | undefined
+  /** Whether the click was a skip button settling every question unanswered. */
+  readonly skip: boolean | undefined
   /** Submitted form field values keyed by component name, when the click submitted a form. */
   readonly formValue: Readonly<Record<string, unknown>> | undefined
   /** Acting operator's open id. */
@@ -60,6 +62,9 @@ export function parseCardAction(body: unknown): CardAction | undefined {
   const outcome = value !== null && typeof value === 'object'
     ? (value as { outcome?: unknown }).outcome
     : undefined
+  const skip = value !== null && typeof value === 'object'
+    ? (value as { skip?: unknown }).skip
+    : undefined
   if (interactionId !== undefined && (typeof interactionId !== 'string' || interactionId === '')) return undefined
   if (formValue !== undefined && (formValue === null || typeof formValue !== 'object' || Array.isArray(formValue))) return undefined
   const operatorOpenId = operator !== null && typeof operator === 'object'
@@ -68,6 +73,7 @@ export function parseCardAction(body: unknown): CardAction | undefined {
   return {
     interactionId,
     outcome: outcome === 'approved' || outcome === 'rejected' ? outcome : undefined,
+    skip: skip === true ? true : undefined,
     formValue: formValue === undefined ? undefined : { ...(formValue as Record<string, unknown>) },
     operatorOpenId: operatorOpenId === undefined || typeof operatorOpenId !== 'string' ? undefined : operatorOpenId,
   }
@@ -215,6 +221,7 @@ export class InteractionBridge {
     const card = buildQuestionCard(interaction, req.questions, {
       title: cards.question.title,
       submitLabel: cards.question.submitLabel,
+      skipLabel: cards.question.skipLabel,
     })
     try {
       await this.reply(anchor, { kind: 'localCard', card })
@@ -253,6 +260,11 @@ export class InteractionBridge {
       const outcome: ApprovalOutcome = action.outcome === 'approved' ? 'allowed-once' : 'rejected'
       pending.settle(outcome)
       return this.settledResponse(outcome, action.operatorOpenId, undefined, 'approval')
+    }
+    if (action.skip === true) {
+      const answers = answersOf(pending.questions, {})
+      pending.settle(answers)
+      return this.settledResponse('skipped', action.operatorOpenId, summarize(answers, pending.questions), 'question')
     }
     const answers = answersOf(pending.questions, action.formValue ?? {})
     pending.settle(answers)
@@ -296,7 +308,11 @@ export class InteractionBridge {
 /**
  * Map one submitted form's field values onto the answer items of the
  * questions the form was built from. Select fields carry selected labels;
- * text inputs on option-less questions carry the custom answer.
+ * the `_custom` text field beside a menu carries the free-text "Other"
+ * answer; text inputs on option-less questions carry the custom answer.
+ * Menus end with the "type below" hint choice, which submit drops. On
+ * single-select questions custom text replaces the selection, matching
+ * the web composer's one-answer-slot rule; multi-select keeps both.
  * @param questions - the questions the pending form card was built from.
  * @param formValue - the submitted field values keyed by component name.
  * @returns the structured answer the waterfall resolves with.
@@ -305,17 +321,27 @@ function answersOf(questions: readonly AskUserQuestionItem[], formValue: Readonl
   const answers: AskUserQuestionAnswerItem[] = []
   for (const item of questions) {
     const value = formValue[`${QUESTION_FIELD_PREFIX}${item.id}`]
+    const customValue = formValue[`${QUESTION_FIELD_PREFIX}${item.id}${QUESTION_CUSTOM_SUFFIX}`]
     let selected: string[] = []
     let custom: string | undefined
     if (Array.isArray(value)) {
-      selected = value.map(entry => String(entry))
-    } else if (typeof value === 'string' && value !== '') {
+      // The trailing hint choice never answers a question, whatever menu
+      // delivered it.
+      selected = value.map(entry => String(entry)).filter(entry => entry !== SELF_INPUT_OPTION_LABEL)
+    } else if (typeof value === 'string' && value !== '' && value !== SELF_INPUT_OPTION_LABEL) {
       if (item.options !== undefined && item.options.length > 0) {
         selected = [value]
       } else {
         custom = value
       }
     }
+    if (typeof customValue === 'string' && customValue !== '') custom = customValue
+    // The web composer treats a single-select choice and its custom text as
+    // one answer slot: typing clears the selection and choosing clears the
+    // text there. A static form cannot clear fields live, so the same submit
+    // rule lands here — custom text replaces the selection on single-select,
+    // while a multi-select question keeps both.
+    if (custom !== undefined && item.multiSelect !== true) selected = []
     answers.push({ id: item.id, selected, ...custom === undefined ? {} : { custom } })
   }
   return { answers }

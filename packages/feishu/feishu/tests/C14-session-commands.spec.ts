@@ -1,4 +1,4 @@
-/** C14: /new, /sessions, and /switch session-generation commands over a real Cordis Context with stubbed core services. */
+﻿/** C14: /new, /sessions, and /switch session-generation commands over a real Cordis Context with stubbed core services. */
 
 import type { AttachmentId, FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -41,7 +41,7 @@ function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared stub harness for the ConversationRouter component specs (C10) and
  * the POC use-case specs split from it (T14 multi-turn isolation, T24
  * replaceability): one real Cordis Context whose core services are behavioral
@@ -48,7 +48,7 @@ export function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

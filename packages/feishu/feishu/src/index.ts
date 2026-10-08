@@ -51,7 +51,9 @@ export {
   buildApprovalCard,
   buildQuestionCard,
   buildSettledCard,
+  QUESTION_CUSTOM_SUFFIX,
   QUESTION_FIELD_PREFIX,
+  SELF_INPUT_OPTION_LABEL,
 } from './interaction-card.ts'
 export type { ApprovalCardStyle, QuestionCardStyle } from './interaction-card.ts'
 export { normalizeEventData } from './ingress.ts'

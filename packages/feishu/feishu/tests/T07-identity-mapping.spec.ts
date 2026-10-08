@@ -1,4 +1,4 @@
-/**
+﻿/**
  * T07 (POC 用例「身份映射」, 王悦, 研究项): 不同租户同名用户、群内无权限者操作
  * → 根据受验证身份授权，不能凭姓名/卡片参数放行。
  * Cover: the operator identity reaches every authorization-relevant record
@@ -46,7 +46,7 @@ function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: true,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

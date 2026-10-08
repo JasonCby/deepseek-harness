@@ -26,7 +26,20 @@ export interface QuestionCardStyle {
   readonly title: string
   /** Form submit button label. */
   readonly submitLabel: string
+  /** Skip button label; skipping settles every question unanswered. */
+  readonly skipLabel: string
 }
+
+/** Component name suffix that marks one text field as a question's custom answer. */
+export const QUESTION_CUSTOM_SUFFIX = '_custom'
+
+/**
+ * Label of the trailing hint choice every option menu appends: a static form
+ * cannot clear a chosen option when custom text arrives, so picking this
+ * visibly signals that the answer comes from the text field below. Submit
+ * drops it, so selecting it has no effect on the answer.
+ */
+export const SELF_INPUT_OPTION_LABEL = '我在下方输入'
 
 /** Component name prefix that marks one form field as the answer of question `id`. */
 export const QUESTION_FIELD_PREFIX = 'q_'
@@ -119,11 +132,20 @@ export function buildQuestionCard(
     fields.push(markdown(label))
     const name = `${QUESTION_FIELD_PREFIX}${item.id}`
     if (item.options !== undefined && item.options.length > 0) {
-      const options = item.options.map(option => ({ text: plain(option.label) }))
+      // Feishu requires a non-empty option value unique within the component;
+      // the label doubles as the callback value so answers stay readable.
+      const options = item.options.map(option => ({ text: plain(option.label), value: option.label }))
+      // Every menu ends with the hint choice: it visually clears a picked
+      // option once custom text takes over, and submit drops it.
+      const withHint = [...options, { text: plain(SELF_INPUT_OPTION_LABEL), value: SELF_INPUT_OPTION_LABEL }]
       fields.push(item.multiSelect === true
-        ? { tag: 'multi_select_static', name, options }
-        : { tag: 'select_static', name, placeholder: plain(item.header ?? item.question), options },
+        ? { tag: 'multi_select_static', name, options: withHint }
+        : { tag: 'select_static', name, placeholder: plain(item.header ?? item.question), options: withHint },
       )
+      // A free-text field beside the menu carries the "Other" answer the
+      // question tool accepts; on single-select questions it replaces the
+      // selection at submit, mirroring the web composer's answer slot.
+      fields.push({ tag: 'input', name: `${name}${QUESTION_CUSTOM_SUFFIX}`, placeholder: plain('Type your answer') })
       continue
     }
     fields.push({ tag: 'input', name, placeholder: plain(item.question) })
@@ -138,7 +160,15 @@ export function buildQuestionCard(
   })
   return {
     header: { template: 'blue', title: plain(style.title) },
-    elements: [{ tag: 'form', name: 'dsh_form', elements: fields }],
+    elements: [
+      { tag: 'form', name: 'dsh_form', elements: fields },
+      // Skipping settles every question unanswered, so the skip button stays
+      // outside the form: a plain callback cannot carry half-filled values.
+      {
+        tag: 'action',
+        actions: [{ tag: 'button', text: plain(style.skipLabel), value: { interactionId: interaction, skip: true } }],
+      },
+    ],
   }
 }
 
@@ -147,6 +177,7 @@ const OUTCOME_LABELS: Record<string, string> = {
   'allowed-once': 'Approved',
   rejected: 'Rejected',
   cancelled: 'Cancelled',
+  skipped: 'Skipped',
   expired: 'Expired',
 }
 

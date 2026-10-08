@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared stub harness for the POC use-case specs (T02/T03/T04/T11/T20/U07).
  * Provides a ConversationRouter over a real Cordis Context whose core services
  * are behavioral stubs, mirroring the component harness in C10.
@@ -43,7 +43,7 @@ export function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

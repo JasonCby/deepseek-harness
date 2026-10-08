@@ -88,6 +88,8 @@ export interface QuestionCardsSettings {
   readonly title: string
   /** Form submit button label. */
   readonly submitLabel: string
+  /** Skip button label; skipping settles every question unanswered. */
+  readonly skipLabel: string
   /** Local card JSON 1.0 frame carrying `{{outcome}}`/`{{decidedBy}}`/`{{summary}}` placeholders for the callback refresh. */
   readonly settledCard?: unknown
   /** Platform template the callback refresh updates the card with, instead of a local settled frame. */
@@ -142,6 +144,7 @@ const approvalCards: z<ApprovalCardsSettings> = z.object({
 const questionCards: z<QuestionCardsSettings> = z.object({
   title: z.string().default('Please answer'),
   submitLabel: z.string().default('Submit'),
+  skipLabel: z.string().default('Skip'),
   settledCard: z.any(),
   settledTemplateId: z.string(),
 })
@@ -149,7 +152,7 @@ const questionCards: z<QuestionCardsSettings> = z.object({
 const interactionCards: z<InteractionCardsSettings> = z.object({
   enabled: z.boolean().default(false),
   approval: approvalCards.default({ approveLabel: 'Approve', rejectLabel: 'Reject' }),
-  question: questionCards.default({ title: 'Please answer', submitLabel: 'Submit' }),
+  question: questionCards.default({ title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' }),
 })
 
 const settingsFields = {
@@ -278,8 +281,8 @@ export function assertSettings(value: FeishuSettings): void {
   if (cards.approval.approveLabel.trim() === '' || cards.approval.rejectLabel.trim() === '') {
     throw new Error('feishu interactionCards approval labels must be non-empty')
   }
-  if (cards.question.title.trim() === '' || cards.question.submitLabel.trim() === '') {
-    throw new Error('feishu interactionCards question title and submit label must be non-empty')
+  if (cards.question.title.trim() === '' || cards.question.submitLabel.trim() === '' || cards.question.skipLabel.trim() === '') {
+    throw new Error('feishu interactionCards question title, submit, and skip labels must be non-empty')
   }
   // A pending card must be a local document: the builder appends the buttons
   // carrying the interaction identity, which a platform template cannot host.

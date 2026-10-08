@@ -11,7 +11,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AskUserQuestionAnswer, AskUserQuestionRequestEvent } from '@deepseek-ai/dsh-user-questions/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FeishuSettings } from '../src/config.ts'
-import { buildQuestionCard, QUESTION_FIELD_PREFIX } from '../src/interaction-card.ts'
+import { buildQuestionCard, QUESTION_CUSTOM_SUFFIX, QUESTION_FIELD_PREFIX } from '../src/interaction-card.ts'
 import { InteractionBridge, type CardActionResponse } from '../src/interaction.ts'
 import { sessionIdForChat } from '../src/conversation.ts'
 import type { ReplyContent, ReplySender } from '../src/reply.ts'
@@ -44,7 +44,7 @@ function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: true,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }
@@ -94,15 +94,18 @@ describe('U03 多轮补充', () => {
       { id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
       { id: 'q2', question: 'Pick many', options: [{ label: 'X' }, { label: 'Y' }], multiSelect: true },
       { id: 'q3', question: 'Say something' },
-    ], { title: 'T', submitLabel: 'Go' })
-    const form = (card['elements'] as { tag: string; elements?: { tag: string; name?: string }[] }[])[0]
+    ], { title: 'T', submitLabel: 'Go', skipLabel: 'Skip' })
+    const elements = card['elements'] as { tag: string; elements?: { tag: string; name?: string }[] }[]
+    const form = elements[0]
     expect(form?.['tag']).toBe('form')
     const fields = form?.elements ?? []
     expect(fields.map(field => [field.tag, field.name ?? ''])).toEqual([
       ['markdown', ''],
       ['select_static', `${QUESTION_FIELD_PREFIX}q1`],
+      ['input', `${QUESTION_FIELD_PREFIX}q1${QUESTION_CUSTOM_SUFFIX}`],
       ['markdown', ''],
       ['multi_select_static', `${QUESTION_FIELD_PREFIX}q2`],
+      ['input', `${QUESTION_FIELD_PREFIX}q2${QUESTION_CUSTOM_SUFFIX}`],
       ['markdown', ''],
       ['input', `${QUESTION_FIELD_PREFIX}q3`],
       ['button', 'dsh_submit'],
