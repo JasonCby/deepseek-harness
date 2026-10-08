@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared e2e harness for the POC positive-path specs (U01/T01): a real
  * ConversationRouter driving a real AgentLoop with a real DeepSeek model and
  * real filesystem tools, while Feishu-facing senders and the router's
@@ -71,7 +71,7 @@ export function settings(): FeishuSettings {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

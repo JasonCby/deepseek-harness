@@ -14,7 +14,7 @@ Status: implemented
 - **回调响应就地刷新卡片。** 回调响应携带 `{ card: { type: 'raw', data } }`（或 `template` 指令）时飞书更新被点击的卡片，条件是卡片结构版本一致——1.0 进、1.0 出。这完全替代仅支持 2.0 的更新 API；`dispatch` 为同步，响应远落在平台三秒窗口之内，agent 的后续回合异步继续。
 - **认领优先级前置。** 宿主层的远端事件转发器在启动时注册，见到请求即认领、仅在其客户端放弃时才透传；按普通顺序注册的通道应答器永远轮不到，且无客户端连接时请求会永久挂起。因此应答器以 `prepend: true` 注册：有锚点的认领排在最前，无锚点的轮次照常透传给转发器。
 - **应答器按 agent 挂载、只认领有锚点的轮次。** `InteractionBridge.mountAnswerers` 在每个聊天 agent 的作用域上下文（创建/恢复走 setup 回调、收养走 agent 自身 ctx）注册 `approval/request` 与 `user-questions/request` 监听器，作用域销毁即撤销认领路径。监听器查询 `ConversationRouter` 为该会话活轮次记录的锚点；无锚点即该轮属于其他通道，经 `next()` 透传，Web UI 继续应答自己的会话。卡片投递失败与功能禁用同样透传。
-- **模板管外观框架，构建器管交互组件。** 可配的 `pendingCard`/`settledCard` 是本地卡片 JSON 1.0 框架，占位符为 `{{toolName}}`/`{{reason}}`（挂起）或 `{{outcome}}`/`{{decidedBy}}`/`{{summary}}`（结算）；构建器插值后追加按钮行（value 携带品牌化交互身份）或生成表单体——带选项的题目投影为 `select_static`/`multi_select_static`，无选项题目投影为 `form` 内的 `input`，提交按钮的 value 携带身份。结算样式也可改指平台 `settledTemplateId`。
+- **模板管外观框架，构建器管交互组件。** 可配的 `pendingCard`/`settledCard` 是本地卡片 JSON 1.0 框架，占位符为 `{{toolName}}`/`{{reason}}`（挂起）或 `{{outcome}}`/`{{decidedBy}}`/`{{summary}}`（结算）；构建器插值后追加按钮行（value 携带品牌化交互身份）或生成表单体——带选项的题目投影为 `select_static`/`multi_select_static`，选项以文案作为回调值（飞书以卡片错误 230099 拒绝无 value 的表单选项），每个菜单末尾附带提交时丢弃的 `我在下方输入` 提示项，菜单旁各带一个自由文本框，无选项题目投影为 `form` 内的 `input`，提交按钮的 value 携带身份，表单外的跳过按钮把所有题目按未回答结算。单选题在提交时按 web 编辑器的单答案槽规则结算——自定义文本替换所选选项，多选题两者并存。结算样式也可改指平台 `settledTemplateId`。
 - **回调先做线上校验再匹配。** `parseCardAction` 读取 SDK 处理器交付的扁平形态（header/event 合并后 `action`/`operator` 位于顶层），收敛出身份、裁决、表单值与操作者。未知或畸形的交互仍成功应答——返回已结算 toast 而非错误——平台因此绝不会重试没有任何挂起交互能匹配的点击。请求中止（其 signal）按 cancelled 结算；迟到点击随之收到 stale toast，因为不存在无回调的刷新路径。
 
 ## 被否决的备选
@@ -27,7 +27,7 @@ Status: implemented
 
 ## 结果
 
-`ask_user_question` 从飞书可答（选项为下拉、自由文本为输入框；应答协议的 `custom` 槽位暂只承载无选项题的答案）。聊天会话上此前 fail-closed 的权限询问路径，在预设策略为 ask 时经确认卡解决。样式覆盖复用模板管线的方言规则（`resolveCardFormat`、builder-i18n 提升），`interpolateCard` 成为共享导出。测试覆盖构建器、线上校验、两条瀑布的认领/透传/中止路径、fake SDK 下两个入口（dispatcher 注册与路由 HTTP 纪律），以及一条经真实 `CardActionHandler` 的真实 Loader 组合往返。
+`ask_user_question` 从飞书可答：选项投影为以文案作回调值的下拉，`custom` 槽位承载任意题目的自由文本答案（单选题上替换所选选项），跳过点击把所有题目按未回答结算，`我在下方输入` 提示项在提交时被丢弃。聊天会话上此前 fail-closed 的权限询问路径，在预设策略为 ask 时经确认卡解决。样式覆盖复用模板管线的方言规则（`resolveCardFormat`、builder-i18n 提升），`interpolateCard` 成为共享导出。测试覆盖构建器、线上校验、两条瀑布的认领/透传/中止路径、custom/跳过/提示项的提交规则、fake SDK 下两个入口（dispatcher 注册与路由 HTTP 纪律），以及一条经真实 `CardActionHandler` 的真实 Loader 组合往返。
 
 ## 相关决策
 

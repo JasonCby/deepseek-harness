@@ -1,4 +1,4 @@
-/** C11: transport-edge and EdgeController tests over a fake Lark SDK binding. */
+﻿/** C11: transport-edge and EdgeController tests over a fake Lark SDK binding. */
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ServerResponse, IncomingMessage } from 'node:http'
@@ -42,7 +42,7 @@ function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: false,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }

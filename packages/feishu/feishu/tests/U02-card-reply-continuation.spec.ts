@@ -1,4 +1,4 @@
-/**
+﻿/**
  * U02 (POC 用例「卡片回复续接」, 王悦): 用户在卡片上补充识别信息 → 受理进入原事件会话并更新原绑定卡片。
  * U03 (多轮补充) 的表单用例在其专属 spec 中。Builders, callback parsing,
  * settings validation, and the bridge's waterfall answers.
@@ -12,7 +12,7 @@ import type {} from '@deepseek-ai/dsh-user-questions/types'
 import type { AskUserQuestionAnswer, AskUserQuestionRequestEvent } from '@deepseek-ai/dsh-user-questions/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertSettings, type FeishuSettings } from '../src/config.ts'
-import { buildApprovalCard, buildQuestionCard, buildSettledCard, QUESTION_FIELD_PREFIX } from '../src/interaction-card.ts'
+import { buildApprovalCard, buildQuestionCard, buildSettledCard, QUESTION_CUSTOM_SUFFIX, QUESTION_FIELD_PREFIX, SELF_INPUT_OPTION_LABEL } from '../src/interaction-card.ts'
 import { InteractionBridge, parseCardAction, type CardActionResponse } from '../src/interaction.ts'
 import { sessionIdForChat } from '../src/conversation.ts'
 import type { ReplyContent, ReplySender } from '../src/reply.ts'
@@ -44,7 +44,7 @@ function settings(): Mutable<FeishuSettings> {
     interactionCards: {
       enabled: true,
       approval: { approveLabel: 'Approve', rejectLabel: 'Reject' },
-      question: { title: 'Please answer', submitLabel: 'Submit' },
+      question: { title: 'Please answer', submitLabel: 'Submit', skipLabel: 'Skip' },
     },
   }
 }
@@ -133,19 +133,42 @@ describe('interaction cards', () => {
       { id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
       { id: 'q2', question: 'Pick many', options: [{ label: 'X' }, { label: 'Y' }], multiSelect: true },
       { id: 'q3', question: 'Say something' },
-    ], { title: 'T', submitLabel: 'Go' })
-    const form = (card['elements'] as { tag: string; elements?: { tag: string; name?: string }[] }[])[0]
+    ], { title: 'T', submitLabel: 'Go', skipLabel: 'Skip' })
+    const elements = card['elements'] as { tag: string; name?: string; elements?: { tag: string; name?: string }[] }[]
+    const form = elements[0]
     expect(form?.['tag']).toBe('form')
     const fields = form?.elements ?? []
     expect(fields.map(field => [field.tag, field.name ?? ''])).toEqual([
       ['markdown', ''],
       ['select_static', `${QUESTION_FIELD_PREFIX}q1`],
+      ['input', `${QUESTION_FIELD_PREFIX}q1${QUESTION_CUSTOM_SUFFIX}`],
       ['markdown', ''],
       ['multi_select_static', `${QUESTION_FIELD_PREFIX}q2`],
+      ['input', `${QUESTION_FIELD_PREFIX}q2${QUESTION_CUSTOM_SUFFIX}`],
       ['markdown', ''],
       ['input', `${QUESTION_FIELD_PREFIX}q3`],
       ['button', 'dsh_submit'],
     ])
+    // Feishu rejects form selects whose options carry no value (card error
+    // 230099 "duplicated option value"), so each option's value is its label.
+    // Every menu ends with the "type below" hint choice; submit drops it.
+    const select = fields.find(field => field.tag === 'select_static') as unknown as { options: { text: { content: string }; value: string }[] }
+    expect(select.options).toEqual([
+      { text: { tag: 'plain_text', content: 'A' }, value: 'A' },
+      { text: { tag: 'plain_text', content: 'B' }, value: 'B' },
+      { text: { tag: 'plain_text', content: SELF_INPUT_OPTION_LABEL }, value: SELF_INPUT_OPTION_LABEL },
+    ])
+    const multi = fields.find(field => field.tag === 'multi_select_static') as unknown as { options: { text: { content: string } }[] }
+    expect(multi.options.map(option => option.text.content)).toEqual(['X', 'Y', SELF_INPUT_OPTION_LABEL])
+    // The skip button sits outside the form: a plain callback cannot carry
+    // half-filled values, so skipping settles every question unanswered.
+    const skipRow = elements[1] as {
+      tag: string
+      actions: { text: { content: string }; value: { interactionId: string; skip: boolean } }[]
+    }
+    expect(skipRow.tag).toBe('action')
+    expect(skipRow.actions[0]!.text.content).toBe('Skip')
+    expect(skipRow.actions[0]!.value).toEqual({ interactionId: 'fi-2', skip: true })
   })
 
   it('renders settled cards from defaults and configured frames', () => {
@@ -167,6 +190,12 @@ describe('interaction cards', () => {
       action: { tag: 'button', value: { interactionId: 'fi-2' }, form_value: { [`${QUESTION_FIELD_PREFIX}q1`]: 'A' } },
     })
     expect(form?.formValue).toEqual({ [`${QUESTION_FIELD_PREFIX}q1`]: 'A' })
+    const skip = parseCardAction({
+      operator: { open_id: 'ou_1' },
+      action: { tag: 'button', value: { interactionId: 'fi-3', skip: true } },
+    })
+    expect(skip).toMatchObject({ interactionId: 'fi-3', skip: true })
+    expect(parseCardAction({ action: { value: { interactionId: 'fi-1', skip: 'yes' } } })?.skip).toBeUndefined()
     expect(parseCardAction(null)).toBeUndefined()
     expect(parseCardAction({ action: { value: { interactionId: 3 } } })).toBeUndefined()
     expect(parseCardAction({ action: { value: { interactionId: 'fi-1' }, form_value: [] } })).toBeUndefined()
@@ -250,19 +279,89 @@ describe('InteractionBridge', () => {
     const response = bridge.dispatch({
       interactionId: interactionOfForm(sent[0]!.card),
       outcome: undefined,
-      formValue: { [`${QUESTION_FIELD_PREFIX}q1`]: 'A', [`${QUESTION_FIELD_PREFIX}q2`]: ['X', 'Y'], [`${QUESTION_FIELD_PREFIX}q3`]: 'hello' },
+      skip: undefined,
+      formValue: {
+        [`${QUESTION_FIELD_PREFIX}q1`]: 'A',
+        [`${QUESTION_FIELD_PREFIX}q1${QUESTION_CUSTOM_SUFFIX}`]: 'actually C',
+        [`${QUESTION_FIELD_PREFIX}q2`]: ['X', 'Y'],
+        [`${QUESTION_FIELD_PREFIX}q2${QUESTION_CUSTOM_SUFFIX}`]: 'and Z',
+        [`${QUESTION_FIELD_PREFIX}q3`]: 'hello',
+      },
       operatorOpenId: 'ou_1',
     })
     const answer: AskUserQuestionAnswer = await pending
     expect(answer.answers).toEqual([
-      { id: 'q1', selected: ['A'] },
-      { id: 'q2', selected: ['X', 'Y'] },
+      // Single-select: custom text replaces the selection, matching the web
+      // composer's one-answer-slot submit rule.
+      { id: 'q1', selected: [], custom: 'actually C' },
+      // Multi-select: selected labels and custom text coexist.
+      { id: 'q2', selected: ['X', 'Y'], custom: 'and Z' },
       { id: 'q3', selected: [], custom: 'hello' },
     ])
     const summary = ((response.card as { data: { elements: { content: string }[] } }).data.elements[0]!.content)
-    expect(summary).toContain('Pick one: A')
-    expect(summary).toContain('Pick many: X, Y')
+    expect(summary).toContain('Pick one: actually C')
+    expect(summary).toContain('Pick many: X, Y, and Z')
     expect(summary).toContain('Say something: hello')
+  })
+
+  it('settles a skip click with every question unanswered', async () => {
+    const { bridge, ctx, sent } = makeBridge(settings())
+    const owner = agent()
+    bridge.mountAnswerers(ctx, owner)
+    bridge.setAnchor(owner.session.id, 'om_1')
+    const request: AskUserQuestionRequestEvent = {
+      questions: [
+        { id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
+        { id: 'q3', question: 'Say something' },
+      ],
+    }
+    const pending = ctx.waterfall('user-questions/request', request, () => Promise.resolve({ answers: [] }))
+    await vi.waitFor(() => { expect(sent).toHaveLength(1) })
+    const response = bridge.dispatch({
+      interactionId: interactionOfForm(sent[0]!.card),
+      outcome: undefined,
+      skip: true,
+      formValue: undefined,
+      operatorOpenId: 'ou_1',
+    })
+    const answer: AskUserQuestionAnswer = await pending
+    expect(answer.answers).toEqual([
+      { id: 'q1', selected: [] },
+      { id: 'q3', selected: [] },
+    ])
+    const settled = ((response.card as { data: { elements: { content: string }[] } }).data.elements[0]!.content)
+    expect(settled).toContain('Skipped')
+  })
+
+  it('treats the hint choice as no selection on submit', async () => {
+    const { bridge, ctx, sent } = makeBridge(settings())
+    const owner = agent()
+    bridge.mountAnswerers(ctx, owner)
+    bridge.setAnchor(owner.session.id, 'om_1')
+    const request: AskUserQuestionRequestEvent = {
+      questions: [
+        { id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
+        { id: 'q2', question: 'Pick many', options: [{ label: 'X' }, { label: 'Y' }], multiSelect: true },
+      ],
+    }
+    const pending = ctx.waterfall('user-questions/request', request, () => Promise.resolve({ answers: [] }))
+    await vi.waitFor(() => { expect(sent).toHaveLength(1) })
+    bridge.dispatch({
+      interactionId: interactionOfForm(sent[0]!.card),
+      outcome: undefined,
+      skip: undefined,
+      formValue: {
+        [`${QUESTION_FIELD_PREFIX}q1`]: SELF_INPUT_OPTION_LABEL,
+        [`${QUESTION_FIELD_PREFIX}q1${QUESTION_CUSTOM_SUFFIX}`]: 'my own take',
+        [`${QUESTION_FIELD_PREFIX}q2`]: [SELF_INPUT_OPTION_LABEL, 'X'],
+      },
+      operatorOpenId: 'ou_1',
+    })
+    const answer: AskUserQuestionAnswer = await pending
+    expect(answer.answers).toEqual([
+      { id: 'q1', selected: [], custom: 'my own take' },
+      { id: 'q2', selected: ['X'] },
+    ])
   })
 
   it('answers stale and malformed clicks without failing the callback', () => {
